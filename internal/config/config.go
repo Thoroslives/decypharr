@@ -423,6 +423,9 @@ func (c *Config) setDefaults() {
 		}
 	}
 
+	// Apply per-mount-type defaults (e.g. DFS cache_dir when migration left it empty).
+	c.Mount.ApplyDefaults()
+
 	if c.Mount.MountPath == "" {
 		// Set MountPath from debridConfig.Folder by splliting it
 		// debrid.Folder is usually {mount_path}/{debrid_name}/__all__ or {mount_path}/{debrid_name}/torrents

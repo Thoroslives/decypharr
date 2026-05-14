@@ -82,6 +82,17 @@ type Mount struct {
 	ExternalRclone ExternalRclone `json:"external_rclone,omitempty"`
 }
 
+// ApplyDefaults fills in safe defaults for fields the user can legally omit.
+// Currently: when mount.type is dfs and cache_dir is empty, default to /cache/dfs.
+// This guards against the v2.x migration trap where mount.type=dfs was
+// auto-populated but cache_dir was left empty, causing the mount manager to
+// fail at startup with `mkdir : no such file or directory`.
+func (m *Mount) ApplyDefaults() {
+	if m.Type == MountTypeDFS && m.DFS.CacheDir == "" {
+		m.DFS.CacheDir = "/cache/dfs"
+	}
+}
+
 func (c *Config) applyMountEnvVars() {
 	// DFS settings
 	if val := getEnv("MOUNT__DFS__CACHE_DIR"); val != "" {
