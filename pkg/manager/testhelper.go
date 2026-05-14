@@ -6,6 +6,7 @@ import (
 
 	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
+	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
@@ -17,9 +18,11 @@ import (
 //   - Real storage (bbolt-backed via storage.NewStorage)
 //   - Real queue rooted on the supplied storage
 //   - downloadCancels registry initialised for Fix B
-//   - No-op logger, no debrid clients, no scheduler, no downloader, no
-//     mount manager. Tests should only exercise surfaces compatible with
-//     that minimal init.
+//   - Empty (but non-nil) clients map so RemoveTorrentPlacements is a safe
+//     no-op for placements whose Provider isn't registered (which is the
+//     expected case in tests)
+//   - No-op logger, no scheduler, no downloader, no mount manager. Tests
+//     should only exercise surfaces compatible with that minimal init.
 //
 // This helper exists so qBit DELETE-handler tests can construct a *Manager
 // without reaching into private fields. Avoids the heavy New() flow which
@@ -34,6 +37,7 @@ func NewForTest(strg *storage.Storage, log zerolog.Logger) *Manager {
 		ctx:               ctx,
 		logger:            log,
 		queue:             newQueue(ctx, strg, 16, ""),
+		clients:           xsync.NewMap[string, debrid.Client](),
 		processingEntries: xsync.NewMap[string, time.Time](),
 		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
 		clock:             realClock{},
