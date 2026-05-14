@@ -97,6 +97,31 @@ func NewStorage(dbPath string) (*Storage, error) {
 		log.Info().Int("count", count).Msg("Migrated entry metadata to new format")
 	}
 
+	// Reset IsDownloading flags left over from the previous instance.
+	// Any entry with this flag set at storage-load time can only have been set
+	// by a worker from the previous (now-dead) process - workers explicitly
+	// clear the flag on completion or error (see types.go lines 403, 415).
+	// Without this reset, the processQueuedEntries filter at
+	// pkg/manager/processor.go:89 ("if entry.IsDownloading { continue }") skips
+	// the orphaned entries forever, requiring manual intervention after every
+	// restart.
+	//
+	// See: /brain/02-Troubleshooting/2026-05-14-decypharr-shutdown-panic-flatline.md
+	if err := s.ForEach(func(e *Entry) error {
+		if !e.IsDownloading {
+			return nil
+		}
+		e.IsDownloading = false
+		if err := s.AddOrUpdate(e); err != nil {
+			// Log but don't fail startup - best-effort. A failure here means
+			// one entry stays stuck; better than failing the whole startup.
+			log.Warn().Err(err).Str("infohash", e.InfoHash).Msg("reset IsDownloading flag")
+		}
+		return nil
+	}); err != nil {
+		log.Warn().Err(err).Msg("iterate entries for IsDownloading reset")
+	}
+
 	return s, nil
 }
 
