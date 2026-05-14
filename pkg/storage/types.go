@@ -228,7 +228,7 @@ type ProviderEntry struct {
 	AddedAt   time.Time                 `msgpack:"added_at" json:"added_at"`                         // When added to this debrid
 	RemovedAt *time.Time                `msgpack:"removed_at,omitempty" json:"removed_at,omitempty"` // When removed (if archived)
 	Status    debridTypes.TorrentStatus `msgpack:"status" json:"status"`                             // ProviderEntry status
-	Progress  float64                   `msgpack:"progress" json:"progress"`                         // Download progress on this debrid (0-100)
+	Progress  float64                   `msgpack:"progress" json:"progress"`                         // Download progress on this debrid (0.0-1.0). Mirrors Entry.RDProgress; written via applyRDProgress (processor.go).
 
 	// Provider-specific file information
 	Files map[string]*ProviderFile `msgpack:"files" json:"files"` // filename -> debrid-specific file info
