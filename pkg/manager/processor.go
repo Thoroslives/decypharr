@@ -154,14 +154,81 @@ func (m *Manager) processQueuedEntries() {
 		}
 		if entry.IsTorrent() {
 			if entry.ActiveProvider != "" {
-				go m.processQueuedTorrent(entry)
+				m.submitProcessingJob(entry, JobTypeTorrent)
 			} else {
 				m.processingEntries.Delete(entry.InfoHash)
 			}
 		} else if entry.IsNZB() {
-			go m.processQueuedNZB(entry)
+			m.submitProcessingJob(entry, JobTypeNZB)
 		} else {
 			m.processingEntries.Delete(entry.InfoHash)
+		}
+	}
+}
+
+// submitProcessingJob hands an entry to the JobQueue worker pool. The pool
+// is sized to config.MaxDownloads (Fix A); before Fix A, processQueuedEntries
+// spawned per-entry goroutines and ignored the cap.
+//
+// On submit failure (queue closed, e.g. during shutdown) we release the
+// processingEntries slot we took at the call site so the entry isn't
+// permanently blocked from re-processing on the next tick.
+func (m *Manager) submitProcessingJob(entry *storage.Entry, jobType JobType) {
+	job := &Job{
+		ID:        entry.InfoHash,
+		Type:      jobType,
+		Entry:     entry,
+		CreatedAt: time.Now(),
+	}
+	if err := m.jobQueue.Submit(job); err != nil {
+		m.logger.Warn().
+			Err(err).
+			Str("infohash", entry.InfoHash).
+			Str("type", string(jobType)).
+			Msg("jobQueue submit failed; releasing processingEntries slot")
+		m.processingEntries.Delete(entry.InfoHash)
+	}
+}
+
+// processJob is the dispatcher passed to JobQueue. It maps a *Job back to
+// the existing per-protocol processing entrypoints and recovers from panics
+// so a single bad job doesn't kill a worker permanently. JobQueue's own
+// workers have no recover() — without this wrapper, a panicked processFunc
+// would tear down the worker goroutine and shrink the pool.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix A).
+func (m *Manager) processJob(ctx context.Context, job *Job) {
+	defer func() {
+		if r := recover(); r != nil {
+			infohash := ""
+			if job != nil && job.Entry != nil {
+				infohash = job.Entry.InfoHash
+			}
+			jobID := ""
+			jobType := ""
+			if job != nil {
+				jobID = job.ID
+				jobType = string(job.Type)
+			}
+			m.logger.Error().
+				Interface("panic", r).
+				Str("job_id", jobID).
+				Str("job_type", jobType).
+				Str("infohash", infohash).
+				Msg("job panicked, worker recovered")
+		}
+	}()
+	if job == nil {
+		return
+	}
+	switch job.Type {
+	case JobTypeTorrent:
+		if job.Entry != nil {
+			m.processQueuedTorrent(job.Entry)
+		}
+	case JobTypeNZB:
+		if job.Entry != nil {
+			m.processQueuedNZB(job.Entry)
 		}
 	}
 }

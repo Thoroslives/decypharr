@@ -10,6 +10,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/testutil"
+	"github.com/sirrobot01/decypharr/pkg/storage"
 )
 
 // newTestJob constructs a Job directly because NewJob dereferences
@@ -79,61 +80,51 @@ func TestJobQueueRespectsMaxWorkers(t *testing.T) {
 }
 
 // TestProcessJobRecoversPanics guards Fix A: a job whose dispatched processing
-// function panics must NOT kill the worker pool. JobQueue's workers have no
-// recover() of their own, so a single bad job would otherwise permanently
-// remove a worker from the pool. Manager.processJob wraps the dispatch in a
-// defer-recover for that reason.
+// function panics must NOT propagate up. JobQueue's workers have no recover()
+// of their own, so without Manager.processJob's wrapper a single bad job would
+// permanently remove a worker from the pool.
 //
-// This test directly exercises Manager.processJob (not JobQueue.worker)
-// because the recovery is in OUR wrapper, not in JobQueue itself.
+// Strategy: build a minimal Manager with no queue, then dispatch a torrent
+// job whose Entry triggers processQueuedTorrent. The first nil-deref happens
+// when processQueuedTorrent calls m.queue.Update — that panic must be caught
+// by processJob's defer-recover and processJob must return normally.
 func TestProcessJobRecoversPanics(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 
-	// Minimal Manager surface that processJob touches. processJob in turn
-	// calls processQueuedTorrent/processQueuedNZB which need many more
-	// fields — but to test the recover() we want the call to panic BEFORE
-	// reaching those methods. We can't easily intercept the inner calls
-	// without invasive surgery, so simulate a panic at the entry point
-	// by passing a job whose Entry is non-nil but whose Type is unknown:
-	// the switch will fall through silently. Use a sentinel Job.Type to
-	// force a panic instead.
-	//
-	// Simpler: directly invoke a function that wraps the same defer-recover
-	// pattern with a panicking inner function. This proves the recover()
-	// shape works; the production code uses the same shape.
-	m := &Manager{logger: zerolog.Nop()}
+	m := &Manager{logger: zerolog.Nop()} // queue: nil — guaranteed panic source
 
-	panickingJob := &Job{
-		ID:   "panic-job",
-		Type: JobTypeTorrent,
-		// Entry: nil is fine; processJob's switch arms guard nil entries.
+	// Entry with no active provider so processQueuedTorrent goes down the
+	// "no active placement found" branch, which calls m.queue.Update and
+	// panics on the nil queue. That panic is what we want processJob to swallow.
+	entry := &storage.Entry{InfoHash: "deadbeef"}
+	job := &Job{
+		ID:        "panic-job",
+		Type:      JobTypeTorrent,
+		Entry:     entry,
+		CreatedAt: time.Now(),
 	}
 
-	// Use a custom dispatcher fragment that mirrors processJob's recover
-	// shape, but with a forced panic inside, to assert the recover stops it.
-	caught := false
-	func() {
-		defer func() {
-			if r := recover(); r != nil {
-				caught = true
-				_ = m.logger // touch field so the compiler keeps it
-			}
-		}()
-		// Real processJob with a panicking inner call would behave the same.
-		// We rely on processJob's own recover for production; this test
-		// asserts the surrounding shape doesn't propagate.
-		panic("forced")
-	}()
-	if !caught {
-		t.Fatal("defer-recover shape did not catch panic; processJob recovery is unsafe")
-	}
-
-	// Direct call to processJob with a nil Entry must NOT panic (guarded
-	// inside the switch arms). This is the real production path.
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	m.processJob(ctx, panickingJob)
-	// If processJob returned, the nil-Entry guards held.
+
+	// If processJob's defer-recover is missing or wrong, this call panics
+	// up through the test runtime and FAILs the test. If it works, processJob
+	// returns normally and the test passes.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		m.processJob(ctx, job)
+	}()
+
+	select {
+	case <-done:
+		// processJob returned cleanly — the panic was caught.
+	case <-time.After(2 * time.Second):
+		t.Fatal("processJob did not return within 2s; recover() likely missing")
+	}
+
+	// Sanity check: processJob with a nil job must also not panic.
+	m.processJob(ctx, nil)
 }
 
 // TestJobQueueCloseDrains guards Fix A: Close blocks until in-flight workers
