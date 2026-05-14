@@ -75,7 +75,10 @@ func NewDownloadManager(manager *Manager) *Downloader {
 	}
 }
 
-func (d *Downloader) download(torrent *storage.Entry) error {
+// download is the per-torrent entry point. ctx is the per-torrent context
+// derived in processAction (Fix B); cancelling it aborts any in-flight grab
+// transfer and stops further file iteration.
+func (d *Downloader) download(ctx context.Context, torrent *storage.Entry) error {
 	// Mark as in-flight up front so the queue scheduler skips this entry while
 	// we're iterating seasons / creating symlinks (processSymlink only flips
 	// this flag after its own directory scan, which is too late for the parent
@@ -98,7 +101,7 @@ func (d *Downloader) download(torrent *storage.Entry) error {
 				d.logger.Error().Err(err).Msgf("Failed to save season torrent")
 				continue
 			}
-			if err := d.process(result, torrentMountPath); err != nil {
+			if err := d.process(ctx, result, torrentMountPath); err != nil {
 				d.markAsError(result, err)
 			}
 		}
@@ -107,13 +110,15 @@ func (d *Downloader) download(torrent *storage.Entry) error {
 		d.completeEntry(torrent)
 		return nil
 	}
-	return d.process(torrent, torrentMountPath)
+	return d.process(ctx, torrent, torrentMountPath)
 }
 
-func (d *Downloader) process(entry *storage.Entry, mountPath string) error {
+// process dispatches to per-action handlers. ctx flows through to the
+// download paths so grab transfers honor per-torrent cancellation (Fix B).
+func (d *Downloader) process(ctx context.Context, entry *storage.Entry, mountPath string) error {
 	switch entry.Action {
 	case config.DownloadActionDownload:
-		return d.processDownload(entry)
+		return d.processDownload(ctx, entry)
 	case config.DownloadActionSymlink:
 		return d.processSymlink(entry, mountPath)
 	case config.DownloadActionStrm:
@@ -459,19 +464,24 @@ func limitedStringSample(values []string, limit int) []string {
 	return sample
 }
 
-// processDownload downloads all files for an entry with progress tracking
-// For torrents: uses HTTP download from debrid
-// For NZBs: uses parallel NNTP segment download
-func (d *Downloader) processDownload(entry *storage.Entry) error {
+// processDownload downloads all files for an entry with progress tracking.
+// For torrents: uses HTTP download from debrid (ctx threaded through grab).
+// For NZBs: uses parallel NNTP segment download (ctx threaded through usenet).
+// Cancelling ctx aborts in-flight transfers and exits the goroutine pool
+// promptly so the qBit DELETE handler can unlink files safely (Fix B).
+func (d *Downloader) processDownload(ctx context.Context, entry *storage.Entry) error {
 	// Check if this is a usenet entry
 	if entry.IsNZB() {
-		return d.processUsenetDownload(entry)
+		return d.processUsenetDownload(ctx, entry)
 	}
-	return d.processTorrentDownload(entry)
+	return d.processTorrentDownload(ctx, entry)
 }
 
-// processTorrentDownload downloads files from debrid via HTTP
-func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
+// processTorrentDownload downloads files from debrid via HTTP. ctx is the
+// per-torrent context registered in processAction (Fix B); it is passed to
+// linkService.GetLink and to each localDownloader invocation so DELETE can
+// cancel in-flight transfers and prevent .fuse_hidden orphan inodes.
+func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.Entry) error {
 	files := entry.GetActiveFiles()
 	d.logger.Info().Msgf("Downloading %d files...", len(files))
 
@@ -501,14 +511,15 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 		_ = d.manager.queue.Update(entry)
 	}
 
-	// Resolve download links before spawning goroutines
+	// Resolve download links before spawning goroutines. Use the per-torrent
+	// ctx (Fix B) so the link resolution itself is also cancellable.
 	type downloadTask struct {
 		file *storage.File
 		link string
 	}
 	var tasks []downloadTask
 	for _, file := range files {
-		downloadLink, err := d.manager.linkService.GetLink(context.Background(), entry, file.Name)
+		downloadLink, err := d.manager.linkService.GetLink(ctx, entry, file.Name)
 		if err != nil {
 			d.logger.Error().Msgf("Failed to get download link for %s: %v", file.Name, err)
 			continue
@@ -528,6 +539,7 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	for _, task := range tasks {
 		p.Go(func() error {
 			if err := d.localDownloader(
+				ctx,
 				task.link,
 				filepath.Join(downloadedFolder, task.file.Name),
 				task.file.ByteRange,
@@ -549,8 +561,11 @@ func (d *Downloader) processTorrentDownload(entry *storage.Entry) error {
 	return nil
 }
 
-// processUsenetDownload downloads NZB files via parallel NNTP segment fetching
-func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
+// processUsenetDownload downloads NZB files via parallel NNTP segment
+// fetching. ctx is the per-torrent context registered in processAction
+// (Fix B); it replaces the previous d.manager.ctx usage so DELETE can
+// cancel an in-flight NZB pull without taking down the whole process.
+func (d *Downloader) processUsenetDownload(ctx context.Context, entry *storage.Entry) error {
 	if d.manager.usenet == nil {
 		return fmt.Errorf("usenet client not configured")
 	}
@@ -605,7 +620,7 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 				_ = d.manager.queue.Update(entry)
 			}
 
-			if err := d.manager.usenet.Download(d.manager.ctx, entry.InfoHash, file.Name, destFile, progressCallback); err != nil {
+			if err := d.manager.usenet.Download(ctx, entry.InfoHash, file.Name, destFile, progressCallback); err != nil {
 				_ = removeEntryDir(destPath)
 				return fmt.Errorf("failed to download %s: %w", file.Name, err)
 			}
@@ -703,15 +718,23 @@ func (d *Downloader) detectMultiSeason(torrent *storage.Entry) (bool, []SeasonIn
 	return true, seasons
 }
 
-// localDownloader downloads a file with grab so interrupted local downloads can resume cleanly.
-func (d *Downloader) localDownloader(downloadURL, filename string, byterange *[2]int64, progressCallback func(int64, int64)) error {
+// localDownloader downloads a file with grab so interrupted local downloads
+// can resume cleanly. ctx is the per-torrent cancellation context (Fix B);
+// grab v3.0.1 honors ctx via req.WithContext, so cancelling ctx aborts the
+// transfer in flight, closes the file descriptor, and lets the caller unlink
+// the destination directory without orphaning the inode.
+//
+// Pre-fix this used d.manager.ctx, which is the process-wide
+// context.Background() set in manager.New (manager.go:114) and never
+// cancelled mid-lifetime, so qBit DELETE had no way to abort the worker.
+func (d *Downloader) localDownloader(ctx context.Context, downloadURL, filename string, byterange *[2]int64, progressCallback func(int64, int64)) error {
 	startTime := time.Now()
 	requestedRange := "full"
 	req, err := grab.NewRequest(filename, downloadURL)
 	if err != nil {
 		return err
 	}
-	req = req.WithContext(d.manager.ctx)
+	req = req.WithContext(ctx)
 	req.BufferSize = 1 << 20
 	req.HTTPRequest.Header.Set("User-Agent", "Decypharr[QBitTorrent]")
 	req.HTTPRequest.Header.Set("Accept", "*/*")
