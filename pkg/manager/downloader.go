@@ -606,7 +606,7 @@ func (d *Downloader) processUsenetDownload(entry *storage.Entry) error {
 			}
 
 			if err := d.manager.usenet.Download(d.manager.ctx, entry.InfoHash, file.Name, destFile, progressCallback); err != nil {
-				_ = os.Remove(destPath)
+				_ = removeEntryDir(destPath)
 				return fmt.Errorf("failed to download %s: %w", file.Name, err)
 			}
 
@@ -825,4 +825,19 @@ func (d *Downloader) logDownloadCompletion(filename string, startTime time.Time,
 		Dur("duration", elapsed).
 		Float64("speed_mbps", speedMBps).
 		Msg("download transfer completed")
+}
+
+// removeEntryDir removes the on-disk path for an entry, including any stray
+// files (partial downloads, hidden inodes). Uses RemoveAll for safety; returns
+// nil if the path was already gone.
+//
+// Defensive: callers historically used os.Remove here which fails with
+// "directory not empty" when stray files remain (e.g., .fuse_hidden* inodes
+// from in-flight downloads). RemoveAll handles both the file and non-empty
+// directory cases.
+func removeEntryDir(p string) error {
+	if err := os.RemoveAll(p); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("delete entry dir %s: %w", p, err)
+	}
+	return nil
 }
