@@ -404,7 +404,9 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 			Status:           t.Status,
 			// RD-reported values go to the RD-side fields. Entry.Progress and
 			// Entry.Speed remain zero until a local-pull worker starts.
-			RDProgress: t.Progress,
+			// Convert RD's 0-100 wire format to the 0.0-1.0 contract documented
+			// at pkg/storage/types.go:69-74 (matches applyRDProgress in processor.go).
+			RDProgress: t.Progress / 100.0,
 			RDSpeed:    t.Speed,
 			Seeders:    t.Seeders,
 			IsComplete: len(t.Files) > 0,
@@ -431,7 +433,10 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 
 	// AddOrUpdate or update placement
 	placement := mt.AddTorrentProvider(t)
-	placement.Progress = t.Progress
+	// Convert RD's 0-100 wire format to the 0.0-1.0 contract used by
+	// applyRDProgress (processor.go) and the rest of the placement-progress
+	// writers (processor.go:439, usenet.go:89 — both write 1.0 on completion).
+	placement.Progress = t.Progress / 100.0
 	if t.Status == types.TorrentStatusDownloaded {
 		downloadedAt := addedOn
 		placement.DownloadedAt = &downloadedAt
