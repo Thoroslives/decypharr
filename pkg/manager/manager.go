@@ -89,6 +89,13 @@ type Manager struct {
 	nzbQueue      *nzbJobQueue
 	nzbWorkerStop chan struct{} // Signal to stop workers
 
+	// jobQueue enforces the concurrent-torrents cap (max_downloads). Before
+	// Fix A, processQueuedEntries spawned `go m.processQueuedTorrent(entry)`
+	// per queued item with no cap, so `max_downloads: 5` could still produce
+	// 80+ concurrent .mkv FDs. JobQueue holds a worker pool sized to
+	// MaxDownloads and serializes submissions through it.
+	jobQueue *JobQueue
+
 	// Notifications service
 	Notifications *notifications.Service
 }
@@ -199,6 +206,12 @@ func (m *Manager) init() {
 	m.cetScheduler = cetScheduler
 	m.migrator = NewMigrator(m.storage)
 	m.downloader = NewDownloadManager(m)
+
+	// Wire JobQueue with cfg.MaxDownloads workers. JobQueue clamps maxWorkers<=0
+	// to 5 internally, matching the prior implicit assumption that the cap was
+	// meaningful. processJob is our defer-recover dispatcher; JobQueue's own
+	// workers have no recover() so wrapping is mandatory.
+	m.jobQueue = NewJobQueue(m.ctx, cfg.MaxDownloads, m.processJob)
 
 	// Initialize HTTP pool for streaming
 	// Note: We can't create a single pool for all files because the LinkRefresh callback
@@ -413,6 +426,13 @@ func (m *Manager) Stop() error {
 		if err := m.mountManager.Stop(); err != nil {
 			m.logger.Warn().Err(err).Msg("Failed to stop mount manager")
 		}
+	}
+
+	// Stop the JobQueue BEFORE shutting down the scheduler so the scheduler
+	// can't re-enqueue mid-drain. JobQueue.Close blocks until in-flight
+	// workers finish, giving a clean drain instead of a hard cancel.
+	if m.jobQueue != nil {
+		m.jobQueue.Close()
 	}
 
 	// Stop schedulers
