@@ -233,10 +233,7 @@ func (dl *DebridLink) UpdateTorrent(t *types.Torrent) error {
 		return fmt.Errorf("torrent not found")
 	}
 	data := dt[0]
-	status := types.TorrentStatusDownloading
-	if data.Status == 100 {
-		status = types.TorrentStatusDownloaded
-	}
+	status := getDebridLinkStatus(data.Status)
 	name := utils.RemoveInvalidChars(data.Name)
 	t.Id = data.ID
 	t.Name = name
@@ -356,6 +353,22 @@ func (dl *DebridLink) SubmitMagnet(t *types.Torrent) (*types.Torrent, error) {
 	}
 
 	return t, nil
+}
+
+// getDebridLinkStatus maps a DebridLink seedbox status code to a normalised
+// TorrentStatus. The DebridLink API uses status=100 to indicate completion;
+// any other value is treated as in-progress. This helper is package-private
+// so tests can exercise the mapping without spinning up the full HTTP stack.
+//
+// G3 audit (PR #270 follow-up): the binary mapping is exhaustive (every int
+// either equals 100 or it doesn't), so there is no fall-through hole here.
+// The CheckStatus switch downstream has its own default clause that returns
+// an error for any unexpected types.TorrentStatus value.
+func getDebridLinkStatus(statusCode int) types.TorrentStatus {
+	if statusCode == 100 {
+		return types.TorrentStatusDownloaded
+	}
+	return types.TorrentStatusDownloading
 }
 
 func (dl *DebridLink) CheckStatus(torrent *types.Torrent) (*types.Torrent, error) {
