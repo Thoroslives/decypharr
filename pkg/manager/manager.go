@@ -28,6 +28,18 @@ import (
 	"golang.org/x/sync/singleflight"
 )
 
+// downloadHandle pairs a per-torrent cancel func with a done channel for
+// callers that need to wait for the worker goroutine to exit. Both are
+// non-nil from RegisterDownload until CancelDownload / completion. The done
+// channel is closed exactly once when the registry entry is released; the
+// cancel func is idempotent.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
+type downloadHandle struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 // Manager handles unified torrent management - replaces wire.Store completely
 type Manager struct {
 	storage      *storage.Storage
@@ -95,6 +107,13 @@ type Manager struct {
 	// 80+ concurrent .mkv FDs. JobQueue holds a worker pool sized to
 	// MaxDownloads and serializes submissions through it.
 	jobQueue *JobQueue
+
+	// downloadCancels maps an infohash to its per-torrent cancel + done
+	// handle while a local download is in flight. Used by the qBit DELETE
+	// handler to cancel the worker before unlinking files, avoiding
+	// .fuse_hidden orphan inodes that leak GBs of data into the deleted FD.
+	// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
+	downloadCancels *xsync.Map[string, *downloadHandle]
 
 	// Notifications service
 	Notifications *notifications.Service
@@ -164,6 +183,7 @@ func New() *Manager {
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
 		processingEntries:      xsync.NewMap[string, time.Time](),
+		downloadCancels:        xsync.NewMap[string, *downloadHandle](),
 		clock:                  realClock{},
 	}
 
@@ -620,6 +640,58 @@ func (m *Manager) DeleteTorrents(infohashes []string, removeFromDebrid bool) err
 		}
 	}
 	return nil
+}
+
+// RegisterDownload derives a per-torrent ctx from parent and registers it for
+// cancellation via CancelDownload. Returns the child ctx and a release func
+// that the caller MUST defer to clear the registry entry and close the done
+// channel. The release func is idempotent.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
+func (m *Manager) RegisterDownload(infohash string, parent context.Context) (context.Context, func()) {
+	ctx, cancel := context.WithCancel(parent)
+	h := &downloadHandle{cancel: cancel, done: make(chan struct{})}
+	m.downloadCancels.Store(infohash, h)
+	release := func() {
+		cancel() // idempotent — repeated cancels are no-ops on context.WithCancel
+		m.downloadCancels.Delete(infohash)
+		// Close done exactly once. select-default makes the close idempotent
+		// even if release is invoked from multiple goroutines.
+		select {
+		case <-h.done:
+		default:
+			close(h.done)
+		}
+	}
+	return ctx, release
+}
+
+// CancelDownload signals the per-torrent ctx for infohash. No-op if no
+// download is registered for that hash. Idempotent.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
+func (m *Manager) CancelDownload(infohash string) {
+	if h, ok := m.downloadCancels.Load(infohash); ok {
+		h.cancel()
+	}
+}
+
+// WaitForDownloadExit blocks until the registered download for infohash exits
+// or the timeout elapses. Returns nil on clean exit, context.DeadlineExceeded
+// on timeout, or nil if no download is registered (nothing to wait for).
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
+func (m *Manager) WaitForDownloadExit(infohash string, timeout time.Duration) error {
+	h, ok := m.downloadCancels.Load(infohash)
+	if !ok {
+		return nil
+	}
+	select {
+	case <-h.done:
+		return nil
+	case <-time.After(timeout):
+		return context.DeadlineExceeded
+	}
 }
 
 func (m *Manager) GetMigrationJob(jobID string) (*storage.SwitcherJob, error) {
