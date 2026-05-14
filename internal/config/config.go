@@ -178,7 +178,24 @@ type Config struct {
 	Retries      int    `json:"retries,omitempty"`
 	SkipAutoMove bool   `json:"skip_auto_move,omitempty"`
 
+	// SyncExistingTorrents controls whether the manager performs the initial
+	// sync of torrents from debrid clients on startup. Pointer-bool so we
+	// can distinguish "not set" (default true, back-compat) from "explicit
+	// false" (skip the sync). Useful for large accounts where the sync is
+	// slow and rebuilds state that doesn't need rebuilding.
+	SyncExistingTorrents *bool `json:"sync_existing_torrents,omitempty"`
+
 	Repair RepairConfig `json:"repair,omitzero"`
+}
+
+// SyncExistingTorrentsResolved returns the effective value of the
+// sync_existing_torrents flag, applying the default-true rule when the
+// field is absent from config.json.
+func (c *Config) SyncExistingTorrentsResolved() bool {
+	if c.SyncExistingTorrents == nil {
+		return true
+	}
+	return *c.SyncExistingTorrents
 }
 
 func (c *Config) JsonFile() string {

@@ -14,6 +14,13 @@ import (
 )
 
 func (m *Manager) syncTorrents(ctx context.Context) {
+	// G4: honor sync_existing_torrents opt-out. Default true (back-compat);
+	// explicit false skips the sync for large accounts where rebuilding
+	// state on every startup is slow and unnecessary.
+	if !m.config.SyncExistingTorrentsResolved() {
+		m.logger.Info().Msg("Initial sync skipped (sync_existing_torrents: false)")
+		return
+	}
 	// First time syncTorrents debrid -> storage
 	m.logger.Info().
 		Int("debrids", m.clients.Size()).
