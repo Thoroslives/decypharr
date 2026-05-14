@@ -58,7 +58,41 @@ func (q *QBit) RefreshTorrent(t *storage.Entry) bool {
 	return true
 }
 
+// GetTorrentProperties returns qBit-compat torrent properties for /api/v2/torrents/properties.
+//
+// Same honest-progress contract as convertToQBitTorrentTorrent: TotalDownloaded
+// and DlSpeed are derived from local-pull lifecycle signals, not from polluted
+// debrid-side counters. Pre-fix used t.Bytes (which mirrored debrid claims) and
+// t.Speed unconditionally — both could be non-zero while no local bytes were
+// being transferred.
 func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
+	t.Sanitize()
+
+	var (
+		dlSpeed         int64
+		upSpeed         int64
+		totalDownloaded int64
+	)
+
+	switch {
+	case t.IsComplete:
+		dlSpeed = 0
+		upSpeed = 0
+		totalDownloaded = t.Size
+	case t.State == storage.EntryStateError:
+		dlSpeed = 0
+		upSpeed = 0
+		totalDownloaded = t.SizeDownloaded
+	case t.IsDownloading:
+		dlSpeed = t.Speed
+		upSpeed = 0 // we never upload; previous value was a copy of Speed which is incorrect
+		totalDownloaded = t.SizeDownloaded
+	default:
+		dlSpeed = 0
+		upSpeed = 0
+		totalDownloaded = 0
+	}
+
 	return &TorrentProperties{
 		AdditionDate:       t.AddedOn.Unix(),
 		Comment:            "Provider Blackhole <https://github.com/sirrobot01/decypharr>",
@@ -66,11 +100,11 @@ func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 		CreationDate:       t.AddedOn.Unix(),
 		DlLimit:            -1,
 		UpLimit:            -1,
-		DlSpeed:            t.Speed,
-		UpSpeed:            t.Speed,
+		DlSpeed:            dlSpeed,
+		UpSpeed:            upSpeed,
 		TotalSize:          t.Size,
-		TotalUploaded:      t.Bytes,
-		TotalDownloaded:    t.Bytes,
+		TotalUploaded:      0, // local-pull only, no seeding
+		TotalDownloaded:    totalDownloaded,
 		LastSeen:           time.Now().Unix(),
 		NbConnectionsLimit: 100,
 		Peers:              0,
