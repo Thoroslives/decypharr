@@ -130,6 +130,25 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 	return nil
 }
 
+// shouldSkipSyncForInFlight returns true when a sync pass should NOT route
+// the given infohash through processNewTorrents / placement-update paths
+// because a local download is currently in flight for it.
+//
+// Defensive guard against sync-vs-download races (Fix C). The Fix B
+// downloadCancels registry tracks per-torrent active downloads; if a hash
+// is present, the local worker is mid-flight and the sync loop must not
+// mutate its placement / re-resolve its files / trigger a re-unpack. The
+// existing NeedsUpdate check normally returns false for in-flight entries
+// (ID + status + Files-non-empty match), but RD-side ID recycling, status
+// flap, or freshly-completed RD torrents whose local pull hasn't yet hit
+// processAction could still slip through. This helper closes those edges.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix C).
+func (m *Manager) shouldSkipSyncForInFlight(infohash string) bool {
+	_, active := m.downloadCancels.Load(infohash)
+	return active
+}
+
 // detectTorrentChanges streams through cached entries and detects what changed
 func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map[string]*types.Torrent) (
 	newTorrents []*types.Torrent,
@@ -144,6 +163,16 @@ func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map
 
 	err = m.storage.ForEachBatch(refreshBatchSize, func(batch []*storage.Entry) error {
 		for _, entry := range batch {
+			// Fix C defensive guard: skip entries with an in-flight local
+			// download. Still populate cachedInfoHashes so the entry is NOT
+			// classified as deleted downstream. "Skip" means "don't update",
+			// not "don't track". Sync will see this entry again on the next
+			// tick after the local download finishes.
+			if m.shouldSkipSyncForInFlight(entry.InfoHash) {
+				cachedInfoHashes[entry.InfoHash] = true
+				continue
+			}
+
 			cachedInfoHashes[entry.InfoHash] = true
 
 			currentTorrent, onRemote := remoteTorrentsByHash[entry.InfoHash]
