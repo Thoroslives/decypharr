@@ -379,7 +379,14 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	}); err != nil {
 		return
 	}
-	err := m.downloader.download(entry)
+	// Register a per-torrent cancellation context (Fix B). The qBit DELETE
+	// handler cancels this ctx before unlinking files, so the grab worker
+	// closes its file descriptor first and Linux doesn't preserve the inode
+	// as a .fuse_hidden orphan. defer release() ensures the registry is
+	// cleared on normal completion as well as panic.
+	ctx, release := m.RegisterDownload(entry.InfoHash, m.ctx)
+	defer release()
+	err := m.downloader.download(ctx, entry)
 	if err != nil {
 		m.logger.Error().
 			Err(err).
