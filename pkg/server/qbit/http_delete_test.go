@@ -179,7 +179,7 @@ func TestHandleTorrentsDeleteIsNoOpWithoutRegisteredWorker(t *testing.T) {
 // no-op at the client layer — what we're really asserting here is that
 // the handler reaches the RemoveTorrentPlacements branch for entries with
 // providers. The behavioral assertion (sync loop doesn't re-import) is
-// covered at the soak-test layer on NorthCloud.
+// covered at the soak-test layer in production.
 //
 // This test exists primarily to guard against the handler being changed in
 // a way that drops the entry capture / fire-and-forget RD cleanup pattern.
