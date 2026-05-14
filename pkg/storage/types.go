@@ -62,9 +62,21 @@ type Entry struct {
 	State TorrentState `msgpack:"state" json:"state"` // This is for QBitTorrent compatibility
 	// Provider State (from active providerEntry)
 	Status   debridTypes.TorrentStatus `msgpack:"status" json:"status"`     // downloaded, downloading, queued, error
-	Progress float64                   `msgpack:"progress" json:"progress"` // Download progress (0-100)
-	Speed    int64                     `msgpack:"speed" json:"speed"`       // Download speed
+	Progress float64                   `msgpack:"progress" json:"progress"` // Local-pull progress (0-1). Reserved for bytes-on-disk reality; do NOT populate from debrid provider claims. Written by downloader.go's progressCallback.
+	Speed    int64                     `msgpack:"speed" json:"speed"`       // Local-pull speed (bytes/sec). Same semantics as Progress: local truth only.
 	Seeders  int                       `msgpack:"seeders" json:"seeders"`   // Number of seeders
+
+	// RDProgress is the upstream debrid provider's reported ingestion progress
+	// (0.0-1.0). This is what RD/AllDebrid/etc. claims about its own caching
+	// of the torrent — NOT a measure of local bytes transferred to Decypharr.
+	// Surfaced for the Decypharr dashboard's "RD: 87% / Local: 0%" visibility.
+	// qBit-compat API consumers (Radarr, Sonarr) should NEVER see this field.
+	RDProgress float64 `msgpack:"rd_progress,omitempty" json:"rd_progress,omitempty"`
+
+	// RDSpeed is the upstream debrid provider's reported ingestion speed
+	// (bytes/sec). Same semantics as RDProgress — RD's claim about its own
+	// caching, not local transfer rate.
+	RDSpeed int64 `msgpack:"rd_speed,omitempty" json:"rd_speed,omitempty"`
 
 	IsComplete bool `msgpack:"is_complete" json:"is_complete"` // Ready for use
 	Bad        bool `msgpack:"bad" json:"bad"`                 // Marked as bad/corrupted
@@ -121,6 +133,9 @@ func (e *Entry) Validate() error {
 func (e *Entry) Sanitize() {
 	if math.IsNaN(e.Progress) || math.IsInf(e.Progress, 0) {
 		e.Progress = 0
+	}
+	if math.IsNaN(e.RDProgress) || math.IsInf(e.RDProgress, 0) {
+		e.RDProgress = 0
 	}
 	for _, p := range e.Providers {
 		if math.IsNaN(p.Progress) || math.IsInf(p.Progress, 0) {
