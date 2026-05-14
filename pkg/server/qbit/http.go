@@ -4,12 +4,22 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
+
+// deleteWorkerWaitTimeout caps how long the qBit DELETE handler will block
+// waiting for an in-flight download worker to exit before it proceeds with
+// unlink. 5s is enough for grab to honor ctx cancel + close its FD on a
+// healthy server; if it's not enough, we log and unlink anyway so DELETE
+// stays responsive. The orphan-FD case is what we're guarding against
+// (Fix B), not perfect ordering — if a worker is genuinely stuck, the user
+// has bigger problems.
+const deleteWorkerWaitTimeout = 5 * time.Second
 
 func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -178,10 +188,43 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, hash := range hashes {
+		// Fix B: cancel any in-flight local-pull worker BEFORE unlinking
+		// files. Without this, the worker keeps writing to a deleted FD and
+		// Linux preserves the inode as .fuse_hidden, blocking the parent dir
+		// from being removed and stranding GBs of data. CancelDownload is a
+		// no-op for hashes with no registered worker, so it's safe to call
+		// unconditionally.
+		q.manager.CancelDownload(hash)
+		if err := q.manager.WaitForDownloadExit(hash, deleteWorkerWaitTimeout); err != nil {
+			q.logger.Warn().
+				Err(err).
+				Str("infohash", hash).
+				Msg("download worker did not exit within timeout; unlinking anyway")
+		}
+
+		// Fix B.4: capture the entry BEFORE Queue.Delete so we can clean up
+		// the upstream debrid placement after. Queue.Delete removes the row
+		// from bbolt, so a post-delete Get would fail. We ignore the lookup
+		// error: if the entry isn't queued (e.g. already completed and moved
+		// to main storage), there's nothing for the RD-side cleanup to act
+		// on at this layer.
+		entry, _ := q.manager.Queue().GetTorrent(hash)
+
 		err := q.manager.Queue().Delete(hash, nil)
 		if err != nil && !strings.Contains(err.Error(), "not found") {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+
+		// Fix B.4: remove the upstream debrid placement so the sync loop on
+		// next tick doesn't re-discover the still-extant RD entry and
+		// re-import the torrent (the loop that produced the "re-grabbed
+		// Terminator 2 every 30s after delete" behavior). Fire-and-forget
+		// because RD API calls take 1-2s and the HTTP response shouldn't
+		// block on remote provider state. RemoveTorrentPlacements iterates
+		// t.Providers, so an entry with no providers is a no-op.
+		if entry != nil {
+			go q.manager.RemoveTorrentPlacements(entry)
 		}
 	}
 
