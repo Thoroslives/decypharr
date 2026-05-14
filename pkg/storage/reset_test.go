@@ -3,6 +3,8 @@ package storage
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/sirrobot01/decypharr/internal/testutil"
 )
 
 // TestStorageResetsIsDownloadingOnNewStorage guards Fix D: after container
@@ -14,7 +16,12 @@ import (
 // See: /brain/02-Troubleshooting/2026-05-14-decypharr-shutdown-panic-flatline.md
 // See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix D)
 func TestStorageResetsIsDownloadingOnNewStorage(t *testing.T) {
-	dir := filepath.Join(t.TempDir(), "db")
+	root := t.TempDir()
+	// NewStorage transitively calls logger.New -> config.Get(), which os.Exit(1)s
+	// without an initialised config path. IsolateConfig points the global config
+	// singleton at our temp dir so the test never trips that exit.
+	testutil.IsolateConfig(t, root)
+	dir := filepath.Join(root, "db")
 
 	// Phase 1: seed a "stuck" entry.
 	s1, err := NewStorage(dir)
