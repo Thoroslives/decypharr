@@ -70,6 +70,20 @@ func (m *Manager) addQueueProcessorJob(ctx context.Context) error {
 		}
 	}
 
+	// processingEntries sweep job (G6): reclaim entries leaked by panicked or
+	// crashed worker goroutines that never reached their `defer Delete()`.
+	if jd, err := utils.ConvertToJobDef(processingEntriesSweepEvery.String()); err != nil {
+		m.logger.Error().Err(err).Msg("Failed to convert processing entries sweep interval to job definition")
+	} else {
+		if _, err := m.scheduler.NewJob(jd, gocron.NewTask(func() {
+			m.sweepProcessingEntries(processingEntriesTTL)
+		}), gocron.WithContext(ctx), gocron.WithName("processing-entries-sweep")); err != nil {
+			m.logger.Error().Err(err).Msg("Failed to create processing entries sweep job")
+		} else {
+			m.logger.Debug().Msgf("Processing entries sweep job scheduled for every %s", processingEntriesSweepEvery)
+		}
+	}
+
 	if m.config.RemoveStalledAfter != "" {
 		// Stalled torrents removal job
 		if jd, err := utils.ConvertToJobDef("1m"); err != nil {

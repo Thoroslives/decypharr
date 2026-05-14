@@ -16,6 +16,40 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
+// processingEntries TTL/sweep parameters (G6). A worker goroutine that
+// panics or exits via an unexpected path never reaches its
+// `defer m.processingEntries.Delete(...)`, so the hash stays in the map
+// forever and blocks future re-processing. The sweep reclaims those.
+//
+// TODO(future): make these configurable via config.Config if soak testing
+// shows the defaults are wrong.
+const (
+	processingEntriesTTL        = 5 * time.Minute
+	processingEntriesSweepEvery = 1 * time.Minute
+)
+
+// sweepProcessingEntries removes entries from processingEntries whose
+// timestamp is older than maxAge relative to the clock. Returns the
+// number of entries reclaimed.
+func (m *Manager) sweepProcessingEntries(maxAge time.Duration) int {
+	cutoff := m.clock.Now().Add(-maxAge)
+	reclaimed := 0
+	m.processingEntries.Range(func(key string, ts time.Time) bool {
+		if ts.Before(cutoff) {
+			m.processingEntries.Delete(key)
+			reclaimed++
+		}
+		return true
+	})
+	if reclaimed > 0 {
+		m.logger.Warn().
+			Int("reclaimed", reclaimed).
+			Dur("ttl", maxAge).
+			Msg("Reclaimed leaked processingEntries (worker likely panicked)")
+	}
+	return reclaimed
+}
+
 // AddNewTorrent creates a torrent from import request and processes it
 func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) error {
 	var (
@@ -90,7 +124,9 @@ func (m *Manager) processQueuedEntries() {
 			continue
 		}
 		// Skip if a previous tick's goroutine hasn't finished yet for this hash.
-		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, struct{}{}); loaded {
+		// The timestamp lets sweepProcessingEntries reclaim entries leaked by
+		// panicked/crashed worker goroutines (G6).
+		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, m.clock.Now()); loaded {
 			continue
 		}
 		if entry.IsTorrent() {

@@ -78,8 +78,12 @@ type Manager struct {
 
 	// In-flight queue-processor dispatches, keyed by InfoHash, to prevent
 	// duplicate goroutines from processing the same entry when the scheduler
-	// re-fires before the previous pass has updated the queue row.
-	processingEntries *xsync.Map[string, struct{}]
+	// re-fires before the previous pass has updated the queue row. The value
+	// is the timestamp the entry was marked in-flight; sweepProcessingEntries
+	// removes stale entries so a crashed/panicked worker goroutine doesn't
+	// leak the hash forever (G6).
+	processingEntries *xsync.Map[string, time.Time]
+	clock             Clock
 
 	// NZB processing worker pool (unbounded queue)
 	nzbQueue      *nzbJobQueue
@@ -152,7 +156,8 @@ func New() *Manager {
 		usenetTimeout:          usenetTimeout,
 		debridSpeedTestResults: xsync.NewMap[string, debridTypes.SpeedTestResult](),
 		activeStreams:          xsync.NewMap[string, *ActiveStream](),
-		processingEntries:      xsync.NewMap[string, struct{}](),
+		processingEntries:      xsync.NewMap[string, time.Time](),
+		clock:                  realClock{},
 	}
 
 	instance.init()
