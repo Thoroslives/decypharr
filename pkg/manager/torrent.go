@@ -373,14 +373,16 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 			Providers:        make(map[string]*storage.ProviderEntry),
 			Files:            make(map[string]*storage.File),
 			Status:           t.Status,
-			Progress:         t.Progress,
-			Speed:            t.Speed,
-			Seeders:          t.Seeders,
-			IsComplete:       len(t.Files) > 0,
-			Bad:              false,
-			AddedOn:          addedOn,
-			CreatedAt:        addedOn,
-			UpdatedAt:        time.Now(),
+			// RD-reported values go to the RD-side fields. Entry.Progress and
+			// Entry.Speed remain zero until a local-pull worker starts.
+			RDProgress: t.Progress,
+			RDSpeed:    t.Speed,
+			Seeders:    t.Seeders,
+			IsComplete: len(t.Files) > 0,
+			Bad:        false,
+			AddedOn:    addedOn,
+			CreatedAt:  addedOn,
+			UpdatedAt:  time.Now(),
 		}
 	}
 

@@ -398,17 +398,87 @@ type TorrentFile struct {
 	Availability float64 `json:"availability,omitempty"`
 }
 
-// ToQBitTorrent converts to QBitTorrent format for API compatibility
+// stalledDL is the qBit-spec state for a torrent that is "in the download
+// queue but not making forward progress." We report this when the debrid
+// provider has the torrent on the upstream side but no local-pull worker
+// is currently transferring bytes to disk — this is honest to Radarr/Sonarr
+// (the torrent is not stuck, just not actively downloading right now).
+const stalledDL storage.TorrentState = "stalledDL"
+
+// ToQBitTorrent converts to QBitTorrent format for API compatibility.
+//
+// Progress, Dlspeed, Downloaded, and AmountLeft are derived from local-pull
+// lifecycle signals (IsComplete, State, IsDownloading) — NOT from
+// Entry.Progress directly, because pre-fix that field was polluted with
+// RD-side ingestion claims via processQueuedTorrent. The pre-fix synthesis
+// `Downloaded = Size * Progress` manufactured phantom bytes that never
+// landed on disk; this version reads Entry.SizeDownloaded (the truthful
+// per-worker counter) instead.
+//
+// State table (post-fix contract):
+//
+//	IsComplete=true                        -> pausedUP, 100%, downloaded=Size
+//	State == EntryStateError               -> error, SizeDownloaded retained
+//	IsDownloading=true                     -> downloading, truthful values
+//	otherwise (queued at RD, no worker)    -> stalledDL, zero progress/speed
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
+	// Sanitize first — internal API does this before serialization; qBit
+	// handler previously did not, leaving NaN/Inf Progress free to reach the
+	// wire when a provider reported size=0 mid-flight.
+	t.Sanitize()
+
+	var (
+		progress   float64
+		dlspeed    int64
+		downloaded int64
+		state      storage.TorrentState
+	)
+
+	switch {
+	case t.IsComplete:
+		progress = 1.0
+		dlspeed = 0
+		downloaded = t.Size
+		state = storage.EntryStatePausedUP
+	case t.State == storage.EntryStateError:
+		progress = 0
+		dlspeed = 0
+		downloaded = t.SizeDownloaded // bytes that made it to disk before error
+		state = storage.EntryStateError
+	case t.IsDownloading:
+		// Active local-pull. Progress/Speed/SizeDownloaded are the truthful
+		// counters written by downloader.go's progressCallback.
+		progress = t.Progress
+		dlspeed = t.Speed
+		downloaded = t.SizeDownloaded
+		state = storage.EntryStateDownloading
+	default:
+		// RD has the torrent on the upstream side (caching, queued, or
+		// downloaded-but-not-yet-pulled) but no local-pull worker is moving
+		// bytes. Radarr/Sonarr should see this as stalled — NOT as a torrent
+		// with partial progress.
+		progress = 0
+		dlspeed = 0
+		downloaded = 0
+		state = stalledDL
+	}
+
+	amountLeft := t.Size - downloaded
+	if amountLeft < 0 {
+		amountLeft = 0
+	}
+
 	qbitTorrent := Torrent{
 		Hash:         t.InfoHash,
 		Name:         t.Name,
 		Size:         t.Size,
-		Progress:     t.Progress,
-		Dlspeed:      t.Speed,
+		Progress:     progress,
+		Dlspeed:      dlspeed,
 		Eta:          int64(0), // ETA not tracked
 		NumSeeds:     t.Seeders,
-		State:        t.State,
+		State:        state,
 		Category:     t.Category,
 		SavePath:     t.SavePath,
 		ContentPath:  t.ContentPath,
@@ -416,8 +486,8 @@ func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
 		CompletionOn: 0,
 		Debrid:       t.ActiveProvider,
 		DebridID:     "",
-		AmountLeft:   int64(float64(t.Size) * (1 - t.Progress)),
-		Downloaded:   int64(float64(t.Size) * t.Progress),
+		AmountLeft:   amountLeft,
+		Downloaded:   downloaded,
 		MagnetURI:    t.Magnet,
 		Files:        getTorrentFiles(t),
 

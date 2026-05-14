@@ -73,8 +73,13 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	state := strings.Trim(r.URL.Query().Get("filter"), "")
 	hashes := getHashes(ctx)
 
-	// Convert hashes to filter function
-	torrents := q.manager.Queue().ListFilter(category, config.ProtocolTorrent, storage.TorrentState(state), hashes, "added_on", false)
+	// Pass ProtocolAll to match the internal /api/torrents handler's membership
+	// view. Pre-fix the qBit-compat endpoint filtered to torrents-only, which
+	// produced asymmetric "93 here vs N there" counts across the two APIs
+	// (Radarr was treated to a different list than the Decypharr dashboard).
+	// arrs configuring decypharr as a qBittorrent backend still expect all
+	// "their" downloads visible, regardless of protocol.
+	torrents := q.manager.Queue().ListFilter(category, config.ProtocolAll, storage.TorrentState(state), hashes, "added_on", false)
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t)

@@ -28,6 +28,29 @@ const (
 	processingEntriesSweepEvery = 1 * time.Minute
 )
 
+// applyRDProgress writes an RD-side (upstream debrid) ingestion claim onto
+// the entry's RDProgress/RDSpeed fields and mirrors the fraction onto the
+// active provider placement.
+//
+// debridPercent is the provider's 0-100 progress value (RD's own format);
+// this function divides by 100 so RDProgress matches the 0-1 contract used
+// by the qBit-compat handler.
+//
+// CRITICAL: this function MUST NOT touch entry.Progress or entry.Speed.
+// Those fields are reserved for local-pull truth and are written exclusively
+// by downloader.go's progressCallback. The pre-Fix-F bug was conflating
+// these two semantic surfaces, which let RD's caching-side progress climb
+// to 100% while no local bytes had transferred.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
+func applyRDProgress(entry *storage.Entry, debridPercent float64, debridSpeed int64) {
+	entry.RDProgress = debridPercent / 100.0
+	entry.RDSpeed = debridSpeed
+	if placement := entry.GetActiveProvider(); placement != nil {
+		placement.Progress = entry.RDProgress
+	}
+}
+
 // sweepProcessingEntries removes entries from processingEntries whose
 // timestamp is older than maxAge relative to the clock. Returns the
 // number of entries reclaimed.
@@ -254,17 +277,11 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 		return
 	}
 
-	// Update entry progress
-	entry.Progress = debridTorrent.Progress / 100.0
-	entry.Speed = debridTorrent.Speed
+	// Update entry progress with RD-side ingestion claim.
+	applyRDProgress(entry, debridTorrent.Progress, debridTorrent.Speed)
 	entry.Size = debridTorrent.GetSize()
 	entry.Seeders = debridTorrent.Seeders
 	entry.UpdatedAt = time.Now()
-
-	// Update placement progress
-	if placement := entry.GetActiveProvider(); placement != nil {
-		placement.Progress = entry.Progress
-	}
 
 	_ = m.queue.Update(entry)
 	// Check if done or failed
