@@ -556,6 +556,32 @@ func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.
 	if err := p.Wait(); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
+
+	// Size-fidelity reconcile (BIS-3 Fix 2). RD advertises STATIC JSON
+	// metadata sizes never reconciled to delivered bytes; Radarr's
+	// size-verified move then false-fails ("File move incomplete, data loss
+	// may have occurred") and re-grabs. HEAD the resolved link of the LARGEST
+	// file only (Concern 2: one probe per completion, not per file), set the
+	// true CDN Content-Length, and persist to the queue store BEFORE
+	// completeEntry so markAsCompleted's queue.Update flushes the corrected
+	// size to the same store the qbit-compat /torrents/info reads (Concern 3).
+	// Any link/HEAD failure (incl. RD bytes_limit_reached cap) is logged and
+	// ignored: prior size kept, completion never blocked (Concern 2 / B0).
+	if largest := largestActiveFile(entry); largest != nil {
+		var probeLink string
+		for _, t := range tasks {
+			if t.file == largest {
+				probeLink = t.link
+				break
+			}
+		}
+		if client, ok := d.manager.clients.Load(entry.ActiveProvider); ok {
+			if prober, ok := client.(contentLengthProber); ok {
+				_ = reconcileEntrySize(ctx, d.manager.queue, entry, prober, probeLink)
+			}
+		}
+	}
+
 	d.completeEntry(entry)
 	d.logger.Info().Msgf("Downloaded all files for %s", entry.Name)
 	return nil

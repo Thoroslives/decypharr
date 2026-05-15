@@ -107,6 +107,29 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 			wantState:      storage.EntryStateError,
 		},
 		{
+			// BIS-3 Fix 2 (Mount size-fidelity). After local-pull completion
+			// the downloader reconciles Entry.Size to the authoritative RD CDN
+			// Content-Length (here 57_251_461_400, the field-observed ~57 GB
+			// remux true length). A completed entry must report that exact
+			// reconciled size as Size/Downloaded with AmountLeft 0. Radarr's
+			// size-verified move compares delivered bytes to this figure, so a
+			// stale (smaller) Size produced the false "File move incomplete,
+			// data loss may have occurred" re-grab loop.
+			name: "completed with reconciled true content length",
+			entry: storage.Entry{
+				Size:          57_251_461_400,
+				Progress:      1.0,
+				IsDownloading: false,
+				IsComplete:    true,
+				State:         storage.EntryStatePausedUP,
+			},
+			wantProgress:   1.0,
+			wantDlspeed:    0,
+			wantDownloaded: 57_251_461_400,
+			wantAmountLeft: 0,
+			wantState:      storage.EntryStatePausedUP,
+		},
+		{
 			// Sanitize parity: NaN Progress field (e.g. division-by-zero when
 			// provider reports size=0 mid-flight) must not leak into JSON.
 			// Pre-fix, the qBit handler skipped Sanitize and could emit NaN.
@@ -128,8 +151,12 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := tt.entry
+			wantSize := tt.entry.Size
 			got := convertToQBitTorrentTorrent(&entry, false)
 
+			if got.Size != wantSize {
+				t.Errorf("Size: got %d want %d (qBit-compat must surface the reconciled Entry.Size verbatim)", got.Size, wantSize)
+			}
 			if got.Progress != tt.wantProgress {
 				t.Errorf("Progress: got %v want %v", got.Progress, tt.wantProgress)
 			}
