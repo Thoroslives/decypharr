@@ -692,6 +692,42 @@ func (r *RealDebrid) DeleteTorrent(torrentId string) error {
 	return nil
 }
 
+// HeadContentLength issues a HEAD against an already-resolved RD download link
+// and returns the authoritative Content-Length the CDN will actually deliver.
+//
+// Decypharr's advertised sizes come from STATIC RD JSON metadata (the torrent
+// data.Bytes and the per-file f.Bytes) which is never reconciled to delivered
+// bytes; the per-file figure under-reported a ~57 GB remux by ~1.2 GB in the
+// field. Radarr does a size-verified move, so a pre-move stat that does not
+// match delivered bytes triggers a false "File move incomplete, data loss may
+// have occurred" and a re-grab loop. Only the live CDN Content-Length is
+// authoritative, and a HEAD gets it without downloading the body.
+//
+// downloadLink is the FULL resolved unrestricted URL (not relative to r.Host).
+// Mirrors DeleteTorrent's request + status-check shape. A non-2xx response or
+// an unknown/absent Content-Length is an error so the caller keeps the prior
+// size instead of persisting a wrong one.
+func (r *RealDebrid) HeadContentLength(ctx context.Context, downloadLink string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, downloadLink, nil)
+	if err != nil {
+		return 0, err
+	}
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, fmt.Errorf("realdebrid API error: Status: %d", resp.StatusCode)
+	}
+	if resp.ContentLength <= 0 {
+		return 0, fmt.Errorf("realdebrid HEAD returned unknown content length (%d)", resp.ContentLength)
+	}
+	return resp.ContentLength, nil
+}
+
 func (r *RealDebrid) GetFileDownloadLinks(t *types.Torrent) (map[string]types.DownloadLink, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
