@@ -122,6 +122,25 @@ func NewStorage(dbPath string) (*Storage, error) {
 		log.Warn().Err(err).Msg("iterate entries for IsDownloading reset")
 	}
 
+	// Reset IsDownloading flags on the queue bucket too. Active in-flight
+	// downloads live here (not in the entries bucket); without this reset,
+	// processQueuedEntries' filter "if entry.IsDownloading { continue }"
+	// skips them forever post-restart.
+	//
+	// See: /brain/05-Projects/2026-05-15-decypharr-fork-soak-findings.md
+	if err := s.ForEachQueued(func(e *Entry) error {
+		if !e.IsDownloading {
+			return nil
+		}
+		e.IsDownloading = false
+		if err := s.UpdateQueue(e); err != nil {
+			log.Warn().Err(err).Str("infohash", e.InfoHash).Msg("reset IsDownloading flag (queue bucket)")
+		}
+		return nil
+	}); err != nil {
+		log.Warn().Err(err).Msg("iterate queue entries for IsDownloading reset")
+	}
+
 	return s, nil
 }
 
