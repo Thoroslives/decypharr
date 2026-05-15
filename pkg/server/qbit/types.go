@@ -422,7 +422,7 @@ const queuedDL storage.TorrentState = "queuedDL"
 // ToQBitTorrent converts to QBitTorrent format for API compatibility.
 //
 // Progress, Dlspeed, Downloaded, and AmountLeft are derived from local-pull
-// lifecycle signals (IsComplete, State, IsDownloading) — NOT from
+// lifecycle signals (IsComplete, State, IsDownloading); NOT from
 // Entry.Progress directly, because pre-fix that field was polluted with
 // RD-side ingestion claims via processQueuedTorrent. The pre-fix synthesis
 // `Downloaded = Size * Progress` manufactured phantom bytes that never
@@ -444,7 +444,7 @@ const queuedDL storage.TorrentState = "queuedDL"
 //	no worker, held in JobQueue            -> queuedDL, zero progress/speed
 //	no worker, NOT held (RD-stuck)         -> stalledDL, zero progress/speed
 func convertToQBitTorrentTorrent(t *storage.Entry, held bool) Torrent {
-	// Sanitize first — internal API does this before serialization; qBit
+	// Sanitize first; internal API does this before serialization; qBit
 	// handler previously did not, leaving NaN/Inf Progress free to reach the
 	// wire when a provider reported size=0 mid-flight.
 	t.Sanitize()

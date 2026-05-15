@@ -68,13 +68,13 @@ type Entry struct {
 
 	// RDProgress is the upstream debrid provider's reported ingestion progress
 	// (0.0-1.0). This is what RD/AllDebrid/etc. claims about its own caching
-	// of the torrent — NOT a measure of local bytes transferred to Decypharr.
+	// of the torrent; NOT a measure of local bytes transferred to Decypharr.
 	// Surfaced for the Decypharr dashboard's "RD: 87% / Local: 0%" visibility.
 	// qBit-compat API consumers (Radarr, Sonarr) should NEVER see this field.
 	RDProgress float64 `msgpack:"rd_progress,omitempty" json:"rd_progress,omitempty"`
 
 	// RDSpeed is the upstream debrid provider's reported ingestion speed
-	// (bytes/sec). Same semantics as RDProgress — RD's claim about its own
+	// (bytes/sec). Same semantics as RDProgress; RD's claim about its own
 	// caching, not local transfer rate.
 	RDSpeed int64 `msgpack:"rd_speed,omitempty" json:"rd_speed,omitempty"`
 

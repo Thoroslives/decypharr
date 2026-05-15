@@ -434,7 +434,7 @@ func (u *Usenet) checkFileAvailability(ctx context.Context, file *storage.NZBFil
 	// Distinguish genuine article-not-found from connection errors:
 	//   TotalCount = FoundCount + notFoundCount + ErrorCount
 	// Only treat a file as unavailable when segments are definitively missing
-	// (notFoundCount > 0). Connection errors mean we couldn't check — treat
+	// (notFoundCount > 0). Connection errors mean we couldn't check; treat
 	// those the same as the top-level error path above (non-fatal, skip check).
 	if !result.AllAvailable() {
 		notFoundCount := result.TotalCount - result.FoundCount - result.ErrorCount

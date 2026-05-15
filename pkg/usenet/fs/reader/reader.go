@@ -209,7 +209,7 @@ func (sr *StreamingReader) readAtPlain(p []byte, off int64) (int, error) {
 // readFromCache reads data from the cache, handling segment boundaries.
 //
 // Uses ReadRangeInto so each pread fetches only the bytes the caller actually
-// needs from that segment — no scratch buffer, no read amplification.
+// needs from that segment; no scratch buffer, no read amplification.
 // Previously the code read entire segments (~750 KB) even for 4 KB reads,
 // which filled the kernel page cache with mostly-unused data and caused
 // progressive performance degradation on large files.
@@ -238,7 +238,7 @@ func (sr *StreamingReader) readFromCache(p []byte, off int64, startSeg, endSeg i
 		copyLen := readEnd - readStart
 
 		// Read only the needed slice directly into the output buffer.
-		// No intermediate scratch buffer — zero extra allocation, zero amplification.
+		// No intermediate scratch buffer; zero extra allocation, zero amplification.
 		n, ok := sr.cache.ReadRangeInto(segIdx, segDataOffset, copyLen, p[outOffset:outOffset+copyLen])
 		if !ok {
 			// Segment was evicted between WaitForSegment and the read. Re-fetch.

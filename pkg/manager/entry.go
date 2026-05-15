@@ -116,7 +116,7 @@ func (m *Manager) GetEntries() []FileInfo {
 		}
 	}
 
-	// AddOrUpdate version.txt — size MUST equal len(content) or FUSE reads
+	// AddOrUpdate version.txt; size MUST equal len(content) or FUSE reads
 	// will hang/short-read waiting for bytes the backend never produces.
 	versionContent := []byte(version.GetInfo().String() + "\n")
 	subDirs = append(subDirs, FileInfo{

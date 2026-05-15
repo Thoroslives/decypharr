@@ -207,7 +207,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 	}
 
 	// Prefer activating an existing, completed placement on the target debrid
-	// before re-submitting the magnet. Skipped when reinsert=true — e.g. the
+	// before re-submitting the magnet. Skipped when reinsert=true; e.g. the
 	// current active provider just failed and its placement is presumed stale.
 	if !reinsert {
 		if target, ok := entry.Providers[debridName]; ok && target != nil && target.ID != "" && target.Status == types.TorrentStatusDownloaded {
@@ -216,7 +216,7 @@ func (f *Fixer) MoveTorrent(entry *storage.Entry, debridName string, reinsert bo
 				entry.UpdatedAt = time.Now()
 				return true, nil
 			}
-			// Activation failed — fall through to a fresh submit.
+			// Activation failed; fall through to a fresh submit.
 		}
 	}
 

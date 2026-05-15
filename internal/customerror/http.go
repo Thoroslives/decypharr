@@ -30,4 +30,4 @@ var TooManyActiveDownloadsError = (&Error{
 	statusCode: 509,
 	err:        errors.New("too many active downloads"),
 	Code:       "too_many_active_downloads",
-}).Retryable() // slot exhaustion is transient — retry after backoff
+}).Retryable() // slot exhaustion is transient; retry after backoff

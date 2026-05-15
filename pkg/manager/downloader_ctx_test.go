@@ -88,14 +88,14 @@ func TestLocalDownloaderRespectsCtxCancel(t *testing.T) {
 		// the exact error type, only that it returned promptly.
 		_ = err
 	case <-time.After(3 * time.Second):
-		t.Fatal("localDownloader did not exit within 3s of ctx cancel — grab is not honoring per-torrent ctx")
+		t.Fatal("localDownloader did not exit within 3s of ctx cancel; grab is not honoring per-torrent ctx")
 	}
 
 	// Wait for the goroutine to fully exit so the destination FD is closed
 	// before we try to remove the directory.
 	wg.Wait()
 
-	// The destination directory must be removable — i.e. no orphan FD.
+	// The destination directory must be removable; i.e. no orphan FD.
 	// Pre-fix this would fail with "directory not empty" because grab kept
 	// writing to a deleted FD that Linux preserved as .fuse_hidden.
 	if err := os.RemoveAll(dir); err != nil {
@@ -106,7 +106,7 @@ func TestLocalDownloaderRespectsCtxCancel(t *testing.T) {
 // TestLocalDownloaderUsesPassedCtxNotManagerCtx is a static-shape regression
 // for the Fix B.2 plumbing: localDownloader's first arg must be honored
 // instead of falling back to d.manager.ctx. We assert this by passing a
-// ctx that is ALREADY cancelled — localDownloader must return immediately
+// ctx that is ALREADY cancelled; localDownloader must return immediately
 // (or shortly thereafter), proving the cancelled ctx propagated to grab.
 //
 // Pre-fix this test would hang for the full timeout because d.manager.ctx
@@ -157,6 +157,6 @@ func TestLocalDownloaderUsesPassedCtxNotManagerCtx(t *testing.T) {
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
-		t.Fatal("localDownloader did not return for pre-cancelled ctx — passed ctx is being ignored")
+		t.Fatal("localDownloader did not return for pre-cancelled ctx; passed ctx is being ignored")
 	}
 }

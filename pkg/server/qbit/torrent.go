@@ -63,7 +63,7 @@ func (q *QBit) RefreshTorrent(t *storage.Entry) bool {
 // Same honest-progress contract as convertToQBitTorrentTorrent: TotalDownloaded
 // and DlSpeed are derived from local-pull lifecycle signals, not from polluted
 // debrid-side counters. Pre-fix used t.Bytes (which mirrored debrid claims) and
-// t.Speed unconditionally — both could be non-zero while no local bytes were
+// t.Speed unconditionally; both could be non-zero while no local bytes were
 // being transferred.
 func (q *QBit) GetTorrentProperties(t *storage.Entry) *TorrentProperties {
 	t.Sanitize()

@@ -295,7 +295,7 @@ func ProtoToEntryItem(pb *EntryItemProto) *EntryItem {
 }
 
 // ============================================================================
-// Job (Repair) Conversions — removed in repair v2.
+// Job (Repair) Conversions; removed in repair v2.
 // ============================================================================
 
 /*

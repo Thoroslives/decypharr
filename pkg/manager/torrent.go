@@ -433,7 +433,7 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	placement := mt.AddTorrentProvider(t)
 	// Convert RD's 0-100 wire format to the 0.0-1.0 contract used by
 	// applyRDProgress (processor.go) and the rest of the placement-progress
-	// writers (processor.go:439, usenet.go:89 — both write 1.0 on completion).
+	// writers (processor.go:439, usenet.go:89; both write 1.0 on completion).
 	placement.Progress = t.Progress / 100.0
 	if t.Status == types.TorrentStatusDownloaded {
 		downloadedAt := addedOn

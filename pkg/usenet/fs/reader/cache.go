@@ -42,14 +42,14 @@ type SegmentCache struct {
 	onDisk   []atomic.Bool // Whether segment is on disk
 
 	// Eviction tracking: per-segment last-access timestamp (unix nano).
-	// Lock-free replacement for container/list LRU — no mutex, no heap allocs.
+	// Lock-free replacement for container/list LRU; no mutex, no heap allocs.
 	accessTime []atomic.Int64
 
 	// Size tracking and limits
 	maxDisk int64
 	curDisk atomic.Int64
 
-	// Async eviction — keeps eviction off the hot write path.
+	// Async eviction; keeps eviction off the hot write path.
 	evictSignal chan struct{}
 	evictWg     sync.WaitGroup
 
@@ -299,7 +299,7 @@ func (sc *SegmentCache) Put(segIdx int, data []byte) error {
 	// Determine offset in the sparse file
 	offset := sc.segOffsets[segIdx]
 
-	// Write to disk — pwrite at non-overlapping offsets is safe to call concurrently.
+	// Write to disk; pwrite at non-overlapping offsets is safe to call concurrently.
 	_, err := sc.diskFile.WriteAt(data, offset)
 
 	if err != nil {
@@ -646,7 +646,7 @@ func (sc *SegmentCache) wakeWaiters(segIdx int) {
 }
 
 // touchSegment records the current time as the last access for a segment.
-// Lock-free replacement for touchLRU — no mutex, no heap allocation.
+// Lock-free replacement for touchLRU; no mutex, no heap allocation.
 func (sc *SegmentCache) touchSegment(segIdx int) {
 	sc.accessTime[segIdx].Store(time.Now().UnixNano())
 }
@@ -682,7 +682,7 @@ func (sc *SegmentCache) evictLoop() {
 
 // findEvictable returns the index of the oldest unpinned on-disk segment,
 // or -1 if none is evictable. Lock-free O(n) scan over access timestamps.
-// For typical Usenet files (50–500 segments) this is faster than walking a
+// For typical Usenet files (50-500 segments) this is faster than walking a
 // linked list under a global mutex.
 func (sc *SegmentCache) findEvictable() int {
 	oldest := int64(math.MaxInt64)
@@ -707,7 +707,7 @@ func (sc *SegmentCache) findEvictable() int {
 // Uses CAS to atomically claim the segment (OnDisk → Empty) and rechecks
 // pin count to close the TOCTOU window between findEvictable and eviction.
 func (sc *SegmentCache) evictFromDisk(segIdx int) bool {
-	// Recheck pin — may have been acquired since findEvictable returned.
+	// Recheck pin; may have been acquired since findEvictable returned.
 	if sc.pinCounts[segIdx].Load() > 0 {
 		return false
 	}

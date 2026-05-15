@@ -93,16 +93,16 @@ func TestDeleteMidDownloadCleansFD(t *testing.T) {
 	// Sanity: the worker has started writing the file (or at least opened it).
 	// We don't assert anything specific about contents; just that the FD exists.
 	if _, statErr := os.Stat(destPath); statErr != nil {
-		// Not necessarily a failure — grab may not have flushed yet. Continue.
+		// Not necessarily a failure; grab may not have flushed yet. Continue.
 		t.Logf("dest not yet visible (grab not flushed yet): %v", statErr)
 	}
 
-	// Fire the cancel — this is what the qBit DELETE handler does pre-unlink.
+	// Fire the cancel; this is what the qBit DELETE handler does pre-unlink.
 	mgr.CancelDownload(hash)
 
 	// Wait for the worker to exit. Should be ~immediate since grab honors ctx.
 	if err := mgr.WaitForDownloadExit(hash, 3*time.Second); err != nil {
-		t.Fatalf("WaitForDownloadExit timed out — grab is not honoring per-torrent ctx: %v", err)
+		t.Fatalf("WaitForDownloadExit timed out; grab is not honoring per-torrent ctx: %v", err)
 	}
 
 	select {
