@@ -121,6 +121,17 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 	}
 	torrent.ContentPath = torrent.DownloadPath()
 
+	// Attach the provider/size/files BEFORE the entry is queued. A fresh
+	// submission over max_downloads sits as an in-memory JobTypeNew job
+	// until a slot frees; processNewTorrent (which used to be the only place
+	// that attached the provider) has not run yet. A container restart drops
+	// the in-memory JobQueue, and processQueuedEntries only recovers
+	// queue-bucket entries whose ActiveProvider is set. Attaching here means
+	// the persisted entry carries ActiveProvider, so the existing
+	// processQueuedEntries -> processQueuedTorrent recovery path picks it up
+	// after a restart instead of skipping it forever (silent grab loss).
+	m.attachProvider(torrent, debridTorrent)
+
 	// Add to queue
 	if err := m.queue.Add(torrent); err != nil {
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
@@ -411,13 +422,18 @@ func (m *Manager) processAction(entry *storage.Entry) {
 	}
 }
 
-// processTorrent handles the complete torrent lifecycle
-func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
-	// Update status to submitting
-	torrent.UpdatedAt = time.Now()
-	_ = m.queue.Update(torrent)
-
-	// AddOrUpdate placement
+// attachProvider copies the debrid-side provider, size and file metadata
+// onto the entry. It is called from BOTH AddNewTorrent (before the entry is
+// queued, so a JobQueue-held-then-restarted entry is restart-recoverable)
+// and processNewTorrent (the normal processing path), so the two paths
+// produce provably identical entry state rather than relying on incidental
+// idempotence.
+//
+// Idempotent for the same debrid: AddTorrentProvider assigns
+// Providers[debrid] by key (fresh ProviderEntry, no append), Size/Bytes are
+// = assignments (not +=), and Files are keyed by name. Calling it twice on
+// the same entry (the no-restart path) therefore does not double-count.
+func (m *Manager) attachProvider(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
 	_ = torrent.AddTorrentProvider(debridTorrent)
 	torrent.ActiveProvider = debridTorrent.Debrid
 	torrent.Bytes = debridTorrent.GetSize()
@@ -425,7 +441,6 @@ func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debri
 	torrent.Name = debridTorrent.Name
 	torrent.OriginalFilename = debridTorrent.OriginalFilename
 	torrent.UpdatedAt = time.Now()
-	// AddOrUpdate files here
 	for _, file := range debridTorrent.Files {
 		tFile := &storage.File{
 			Name:      file.Name,
@@ -437,6 +452,20 @@ func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debri
 		}
 		torrent.Files[file.Name] = tFile
 	}
+}
+
+// processTorrent handles the complete torrent lifecycle
+func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debridTypes.Torrent) {
+	// Update status to submitting
+	torrent.UpdatedAt = time.Now()
+	_ = m.queue.Update(torrent)
+
+	// AddOrUpdate placement. Shared with AddNewTorrent so the no-restart
+	// path (AddNewTorrent attach then this attach) and the restart-recovery
+	// path produce identical entry state. The block is idempotent for the
+	// same debrid: AddTorrentProvider assigns Providers[debrid] by key (no
+	// append), Size/Bytes are = assignments, and Files are keyed by name.
+	m.attachProvider(torrent, debridTorrent)
 	_ = m.queue.Update(torrent)
 
 	if debridTorrent.Status != debridTypes.TorrentStatusDownloaded {
