@@ -71,6 +71,10 @@ jobs:
             type=ref,event=branch
             type=sha,prefix=sha-,format=short
 
+      - name: Resolve short SHA
+        id: short_sha
+        run: echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
@@ -79,5 +83,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=2.3
+            CHANNEL=fork+${{ steps.short_sha.outputs.value }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
