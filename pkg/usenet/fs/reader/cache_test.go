@@ -265,7 +265,10 @@ func TestSegmentCacheDiskEviction(t *testing.T) {
 	}
 	defer cache.Close()
 
-	// Put 5 segments
+	// Put 5 segments. A short gap between puts guarantees strictly
+	// increasing LRU access timestamps, so the oldest-first evictor
+	// deterministically drops segments 0,1,2 and keeps 3,4 regardless
+	// of clock resolution.
 	for i := 0; i < 5; i++ {
 		data := make([]byte, 1000)
 		for j := range data {
@@ -274,6 +277,22 @@ func TestSegmentCacheDiskEviction(t *testing.T) {
 		if err := cache.Put(i, data); err != nil {
 			t.Fatalf("failed to put segment %d: %v", i, err)
 		}
+		time.Sleep(2 * time.Millisecond)
+	}
+
+	// Eviction is asynchronous: Put only signals a background evictor
+	// (kept off the hot write path by design), so the assertions cannot
+	// run synchronously after the Put loop. Wait for the evictor to
+	// reach its own termination condition (curDisk within budget)
+	// before asserting. Polling the same invariant the evictor uses
+	// makes this deterministic and independent of goroutine scheduling.
+	deadline := time.Now().Add(5 * time.Second)
+	for cache.curDisk.Load() > cache.maxDisk {
+		if time.Now().After(deadline) {
+			t.Fatalf("evictor did not drain disk usage to budget: curDisk=%d maxDisk=%d evictions=%d",
+				cache.curDisk.Load(), cache.maxDisk, stats.Evictions.Load())
+		}
+		time.Sleep(2 * time.Millisecond)
 	}
 
 	if stats.Evictions.Load() == 0 {
