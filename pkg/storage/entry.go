@@ -97,6 +97,18 @@ func (s *Storage) ForEach(fn func(*Entry) error) error {
 	})
 }
 
+// ForEachQueued iterates over entries in the queue bucket. Mirrors ForEach
+// but reads from s.queue (active in-flight downloads) instead of s.entries.
+func (s *Storage) ForEachQueued(fn func(*Entry) error) error {
+	return s.queue.ForEach(func(key string, value []byte) error {
+		var pb EntryProto
+		if err := proto.Unmarshal(value, &pb); err != nil {
+			return nil
+		}
+		return fn(ProtoToEntry(&pb))
+	})
+}
+
 // ForEachBatch iterates over entries in batches
 func (s *Storage) ForEachBatch(batchSize int, fn func([]*Entry) error) error {
 	batch := make([]*Entry, 0, batchSize)
