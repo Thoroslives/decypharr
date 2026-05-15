@@ -196,6 +196,24 @@ func (q *JobQueue) FindJob(jobID string) *Job {
 	return nil
 }
 
+// IsPending reports whether a job with the given ID is still waiting in the
+// queue and has NOT yet been picked up by a worker. pop() removes a job from
+// q.jobs before the worker runs processFunc, so a job present in q.jobs is by
+// definition pending (not in-flight). This is the true "held in the JobQueue,
+// waiting for a free worker slot" signal: a job a worker is already running
+// is absent from q.jobs and returns false here.
+func (q *JobQueue) IsPending(jobID string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	for _, job := range q.jobs {
+		if job.ID == jobID {
+			return true
+		}
+	}
+	return false
+}
+
 // PendingCount returns the count of pending jobs, optionally filtered by type
 func (q *JobQueue) PendingCount(jobType JobType) int {
 	q.mu.Lock()

@@ -401,9 +401,23 @@ type TorrentFile struct {
 // stalledDL is the qBit-spec state for a torrent that is "in the download
 // queue but not making forward progress." We report this when the debrid
 // provider has the torrent on the upstream side but no local-pull worker
-// is currently transferring bytes to disk — this is honest to Radarr/Sonarr
-// (the torrent is not stuck, just not actively downloading right now).
+// is currently transferring bytes to disk and the entry is NOT waiting in
+// the JobQueue for a slot. To Radarr/Sonarr this reads as a stalled grab,
+// which is honest: such a torrent may be stuck on a slow or dead RD-side
+// download and Radarr should still be able to time it out.
 const stalledDL storage.TorrentState = "stalledDL"
+
+// queuedDL is the qBit-spec state for a torrent that is queued and waiting
+// to start. We report this only when the entry's job is still pending in the
+// in-memory JobQueue (over max_downloads, waiting for a free worker slot):
+// a genuinely queued submission that WILL start once a slot frees. Reporting
+// queuedDL (instead of stalledDL) stops Radarr from badging it stalled and
+// applying aggressive stalled-handling (remove plus blocklist) to an item
+// that is merely waiting its turn. This is gated on real JobQueue membership,
+// not an entry-field heuristic: a torrent stuck RD-side with no pending job
+// looks identical by entry fields but must stay stalledDL so a dead grab can
+// still time out.
+const queuedDL storage.TorrentState = "queuedDL"
 
 // ToQBitTorrent converts to QBitTorrent format for API compatibility.
 //
@@ -415,15 +429,23 @@ const stalledDL storage.TorrentState = "stalledDL"
 // landed on disk; this version reads Entry.SizeDownloaded (the truthful
 // per-worker counter) instead.
 //
+// held reports whether this entry's job is still pending in the in-memory
+// JobQueue (over max_downloads, waiting for a free worker slot, not yet
+// picked up by a worker). The caller computes it from JobQueue membership;
+// it is the only signal that reliably tells a genuinely queued submission
+// apart from a torrent stuck RD-side (the two are identical by entry fields
+// after the provider is attached up front).
+//
 // State table (post-fix contract):
 //
 //	IsComplete=true                        -> pausedUP, 100%, downloaded=Size
 //	State == EntryStateError               -> error, SizeDownloaded retained
 //	IsDownloading=true                     -> downloading, truthful values
-//	otherwise (queued at RD, no worker)    -> stalledDL, zero progress/speed
+//	no worker, held in JobQueue            -> queuedDL, zero progress/speed
+//	no worker, NOT held (RD-stuck)         -> stalledDL, zero progress/speed
 //
 // See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
-func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
+func convertToQBitTorrentTorrent(t *storage.Entry, held bool) Torrent {
 	// Sanitize first — internal API does this before serialization; qBit
 	// handler previously did not, leaving NaN/Inf Progress free to reach the
 	// wire when a provider reported size=0 mid-flight.
@@ -455,14 +477,24 @@ func convertToQBitTorrentTorrent(t *storage.Entry) Torrent {
 		downloaded = t.SizeDownloaded
 		state = storage.EntryStateDownloading
 	default:
-		// RD has the torrent on the upstream side (caching, queued, or
-		// downloaded-but-not-yet-pulled) but no local-pull worker is moving
-		// bytes. Radarr/Sonarr should see this as stalled — NOT as a torrent
-		// with partial progress.
+		// No local-pull worker is moving bytes, and there is no partial
+		// progress to report either way.
 		progress = 0
 		dlspeed = 0
 		downloaded = 0
-		state = stalledDL
+		if held {
+			// The entry's job is still pending in the JobQueue (over
+			// max_downloads, waiting for a free worker slot). It WILL start
+			// once a slot frees, so report it as queued, not stalled, to
+			// keep Radarr from removing and blocklisting a waiting grab.
+			state = queuedDL
+		} else {
+			// RD has the torrent on the upstream side (caching, queued, or
+			// downloaded-but-not-yet-pulled) but no JobQueue job is pending
+			// for it. This may be a grab stuck on a slow or dead RD-side
+			// download, so report stalled and let Radarr time it out.
+			state = stalledDL
+		}
 	}
 
 	amountLeft := t.Size - downloaded

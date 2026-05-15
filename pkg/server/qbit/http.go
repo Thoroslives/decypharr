@@ -92,7 +92,11 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	torrents := q.manager.Queue().ListFilter(category, config.ProtocolAll, storage.TorrentState(state), hashes, "added_on", false)
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
-		qbitTorrents[i] = convertToQBitTorrentTorrent(t)
+		// held: this entry's job is still pending in the JobQueue (waiting
+		// for a free worker slot). When true the conversion reports queuedDL
+		// instead of stalledDL so Radarr treats it as queued, not stalled.
+		held := q.manager.IsJobPending(t.InfoHash)
+		qbitTorrents[i] = convertToQBitTorrentTorrent(t, held)
 	}
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }

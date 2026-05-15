@@ -676,6 +676,25 @@ func (m *Manager) CancelDownload(infohash string) {
 	}
 }
 
+// IsJobPending reports whether the entry with the given infohash has a job
+// still waiting in the JobQueue that no worker has started yet. Job IDs for
+// new and reprocessing torrent/NZB jobs are the entry InfoHash (see
+// AddNewTorrent and submitProcessingJob), so this answers "is this entry
+// queued for a free worker slot, not yet being processed".
+//
+// Used by the qBit list handler to distinguish a genuinely JobQueue-held
+// submission (report queuedDL) from a torrent stuck on the debrid side with
+// no pending job (report stalledDL so Radarr can still time it out).
+//
+// Nil-safe: returns false when the JobQueue is not wired (e.g. test Managers
+// built via NewForTest), so callers never need a nil check.
+func (m *Manager) IsJobPending(infohash string) bool {
+	if m.jobQueue == nil {
+		return false
+	}
+	return m.jobQueue.IsPending(infohash)
+}
+
 // WaitForDownloadExit blocks until the registered download for infohash exits
 // or the timeout elapses. Returns nil on clean exit, context.DeadlineExceeded
 // on timeout, or nil if no download is registered (nothing to wait for).

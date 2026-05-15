@@ -236,3 +236,67 @@ func TestJobQueueCloseDrains(t *testing.T) {
 		t.Error("Submit after Close must error")
 	}
 }
+
+// TestJobQueueIsPending guards Fix 2 (BIS-2): IsPending must report true ONLY
+// while a job is still in the not-yet-popped slice, and false once a worker
+// has popped it (in-flight) or it never existed. This is the real "held in
+// JobQueue, not yet picked up by a worker" discriminator the qBit state
+// mapping keys off; it must NOT match a job a worker is already running
+// (that entry will make progress and is not "queued waiting for a slot").
+func TestJobQueueIsPending(t *testing.T) {
+	testutil.IsolateConfig(t, t.TempDir())
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	processFunc := func(ctx context.Context, job *Job) {
+		once.Do(func() { close(started) })
+		<-release
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	// Single worker so the second submitted job stays strictly pending while
+	// the first one is in-flight (popped, running processFunc).
+	q := NewJobQueue(ctx, 1, processFunc)
+	defer q.Close()
+
+	// Unknown id is never pending.
+	if q.IsPending("nope") {
+		t.Error("IsPending(unknown) = true, want false")
+	}
+
+	running := newTestJob(JobTypeNew, "running")
+	pending := newTestJob(JobTypeNew, "pending")
+	if err := q.Submit(running); err != nil {
+		t.Fatalf("submit running: %v", err)
+	}
+	<-started // worker has popped "running" and is blocked in processFunc
+
+	if err := q.Submit(pending); err != nil {
+		t.Fatalf("submit pending: %v", err)
+	}
+
+	// "pending" is queued behind the busy single worker -> still pending.
+	if !q.IsPending("pending") {
+		t.Error("IsPending(pending) = false, want true (queued, no free worker)")
+	}
+	// "running" has been popped and is executing -> NOT pending. This is the
+	// pending-vs-running distinction the discriminator depends on.
+	if q.IsPending("running") {
+		t.Error("IsPending(running) = true, want false (already popped by a worker)")
+	}
+
+	close(release)
+}
+
+// TestManagerIsJobPendingNilSafe guards Fix 2: Manager.IsJobPending must be
+// safe to call when the JobQueue is not wired (NewForTest builds a Manager
+// with a nil jobQueue). The qBit list handler calls it per entry; a nil-deref
+// there would panic the whole /torrents/info response.
+func TestManagerIsJobPendingNilSafe(t *testing.T) {
+	m := &Manager{} // jobQueue nil, as in NewForTest
+	if m.IsJobPending("anything") {
+		t.Error("IsJobPending on nil jobQueue = true, want false")
+	}
+}
