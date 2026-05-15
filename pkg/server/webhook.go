@@ -11,7 +11,7 @@ import (
 
 // handleTautulli handles webhooks from Tautulli. When the payload includes a
 // tvdb/tmdb id (or a generic media_id), the repair system runs a targeted
-// recheck against that specific media — the v2 equivalent of v1's
+// recheck against that specific media; the v2 equivalent of v1's
 // "media-id-scoped repair job". When no media id is supplied the webhook
 // falls back to a full manual sweep.
 func (s *Server) handleTautulli(w http.ResponseWriter, r *http.Request) {

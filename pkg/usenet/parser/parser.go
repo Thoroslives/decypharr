@@ -26,7 +26,7 @@ var (
 	// TS sync-byte check at offset 188 is the deepest we go, so 512 bytes is ample.
 	defaultMaxSnippetSize = 512
 	// metadataOnly requests the yEnc header (name/size/offsets) without any
-	// decoded payload — the connection is drained and returned to the pool.
+	// decoded payload; the connection is drained and returned to the pool.
 	metadataOnly = 0
 )
 
@@ -364,7 +364,7 @@ func (p *NZBParser) batchDetectContentTypes(ctx context.Context, unknownFiles []
 		return nil
 	}
 
-	// Use up to maxConcurrent workers — same budget as the rest of the parser.
+	// Use up to maxConcurrent workers; same budget as the rest of the parser.
 	workers := min(len(unknownFiles), p.maxConcurrent)
 
 	mapper := iter.Mapper[nzbparser.NzbFile, contentResult]{

@@ -436,7 +436,7 @@ func firstProtocol(results []fileResult) config.Protocol {
 
 // repairBroken groups broken Arr-known files by Arr, then deletes them and
 // kicks off a re-search. It does not verify the outcome: SearchMissing only
-// queues a download in the Arr — the actual replacement lands minutes-to-
+// queues a download in the Arr; the actual replacement lands minutes-to-
 // hours later, so the next scheduled sweep is where verification happens.
 // Affected entries get LastRepairAt stamped so the UI can show when a fix
 // was last attempted.
@@ -480,11 +480,11 @@ func (r *Repair) repairBroken(ctx context.Context, run *storage.RepairRun, healt
 
 		// Look up the grab history per broken file. Files whose grab record
 		// exists get blocklisted via MarkHistoryFailed (which Sonarr/Radarr
-		// auto-re-searches when "Redownload Failed" is on — the default).
+		// auto-re-searches when "Redownload Failed" is on; the default).
 		// Files with no grab record (history trimmed, manual import) fall back
 		// to an explicit SearchMissing.
 		//
-		// HistoryIDs are deduped per arr — a season-pack grab covers multiple
+		// HistoryIDs are deduped per arr; a season-pack grab covers multiple
 		// broken files but only needs one history/failed POST.
 		historyIDs := make(map[int]struct{})
 		needSearch := make([]arr.ContentFile, 0)
@@ -842,7 +842,7 @@ func (r *Repair) FixBroken(ctx context.Context, names []string) (*storage.Repair
 		ctx = r.parentCtx
 	}
 
-	// Skip entries with no Arr-known broken files — there's nothing the fix
+	// Skip entries with no Arr-known broken files; there's nothing the fix
 	// pass can delete and re-search for them.
 	healths, wantedCount := r.collectBrokenHealths(names, true)
 	if healths.Size() == 0 {

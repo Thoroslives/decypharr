@@ -40,7 +40,7 @@ const (
 
 	// fadviseQueueSize bounds the backlog of page-cache eviction hints. fadvise
 	// is advisory, so when the queue fills we drop the hint rather than block
-	// the writer — the kernel will reclaim under memory pressure regardless.
+	// the writer; the kernel will reclaim under memory pressure regardless.
 	fadviseQueueSize = 32
 )
 
@@ -496,7 +496,7 @@ func (c *Cache) AddDownloadedBytes(n int64) {
 
 // updateSpeed samples the current download speed.
 // It uses Swap on both lastSpeedTime and lastSpeedBytes so that concurrent
-// callers each claim their own window atomically — no two goroutines share
+// callers each claim their own window atomically; no two goroutines share
 // the same (lastTime, lastBytes) pair, eliminating the race between a
 // separate Load and Store on the two fields.
 func (c *Cache) updateSpeed() {
@@ -507,7 +507,7 @@ func (c *Cache) updateSpeed() {
 	lastBytes := c.lastSpeedBytes.Swap(currentBytes)
 
 	if lastTime == 0 {
-		// First sample — just record the baseline, no speed yet.
+		// First sample; just record the baseline, no speed yet.
 		return
 	}
 	elapsed := now - lastTime
@@ -688,7 +688,7 @@ func (item *CacheItem) applyFadvise(r fadviseRange) {
 }
 
 // queueFadvise hands a range to the background fadvise worker. Non-blocking:
-// if the queue is full the hint is dropped — fadvise is advisory and the
+// if the queue is full the hint is dropped; fadvise is advisory and the
 // kernel reclaims pages under memory pressure regardless.
 func (item *CacheItem) queueFadvise(offset, length int64) {
 	ch := item.fadviseCh
@@ -798,7 +798,7 @@ func (item *CacheItem) StopDownloaders() {
 }
 
 // ReadAt reads from the sparse file, downloading if needed.
-// Uses context.Background() — prefer ReadAtContext when a caller context is available.
+// Uses context.Background(); prefer ReadAtContext when a caller context is available.
 func (item *CacheItem) ReadAt(p []byte, off int64) (int, error) {
 	return item.ReadAtContext(context.Background(), p, off)
 }
@@ -858,7 +858,7 @@ func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, 
 	skipped = 0
 
 	// FindAll is read-only; hold RLock for its duration instead of copying the
-	// ranges slice first. The lock window is O(log k) where k is typically 1–3
+	// ranges slice first. The lock window is O(log k) where k is typically 1-3
 	// during active streaming, so extending the hold is negligible.
 	item.metaMu.RLock()
 	frs := item.info.Rs.FindAll(writeRange)
@@ -890,7 +890,7 @@ func (item *CacheItem) WriteAtNoOverwrite(p []byte, off int64) (n, skipped int, 
 
 	// Advise the kernel to evict written pages from the page cache, but do it
 	// off the hot path. posix_fadvise(FADV_DONTNEED) blocks on writeback for
-	// dirty pages, and the bytes we just wrote are dirty by definition — doing
+	// dirty pages, and the bytes we just wrote are dirty by definition; doing
 	// this synchronously stalls every streaming write while flushing the just-
 	// written 256KB to disk. The worker drains hints in the background; the
 	// data is already durable on disk (sparse file) so a brief delay before

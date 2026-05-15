@@ -89,7 +89,7 @@ func (cf *CustomFolders) matchesFilter(folderName string, fileInfo os.FileInfo, 
 		return false
 	}
 
-	// Separate regex and files_regex filters — when both are present, treat as OR
+	// Separate regex and files_regex filters; when both are present, treat as OR
 	var regexFilters []directoryFilter
 	var filesRegexFilters []directoryFilter
 	var otherFilters []directoryFilter
@@ -134,7 +134,7 @@ func (cf *CustomFolders) matchesFilter(folderName string, fileInfo os.FileInfo, 
 			}
 		}
 	} else {
-		// Single type present — AND logic
+		// Single type present; AND logic
 		for _, filter := range append(regexFilters, filesRegexFilters...) {
 			if !cf.checkSingleFilter(filter, fileInfo, addedTime, getFileNames) {
 				return false

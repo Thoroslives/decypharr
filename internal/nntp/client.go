@@ -482,7 +482,7 @@ func (c *Client) getAnyAvailableConnection(ctx context.Context, exclusions provi
 // Each goroutine reports exactly one result (success or error) via resultCh, or
 // exits silently if it never acquired a slot. A WaitGroup + channel-close ensures
 // the receiver loop always terminates, and any extra connections won by multiple
-// goroutines are properly returned to the pool — preventing slot leaks under heavy
+// goroutines are properly returned to the pool; preventing slot leaks under heavy
 // concurrent import load.
 func (c *Client) raceForConnection(ctx context.Context, eligible []config.UsenetProvider) (*Connection, config.UsenetProvider, error) {
 	type result struct {
@@ -493,7 +493,7 @@ func (c *Client) raceForConnection(ctx context.Context, eligible []config.Usenet
 
 	innerCtx, cancel := context.WithCancel(ctx)
 
-	// Buffer for all possible results — goroutines that win the slot race send here.
+	// Buffer for all possible results; goroutines that win the slot race send here.
 	resultCh := make(chan result, len(eligible))
 	var wg sync.WaitGroup
 
@@ -508,7 +508,7 @@ func (c *Client) raceForConnection(ctx context.Context, eligible []config.Usenet
 			case pp.slots <- struct{}{}:
 				// Got slot
 			case <-innerCtx.Done():
-				return // Context cancelled before we got a slot — no send needed
+				return // Context cancelled before we got a slot; no send needed
 			}
 
 			// Check if context was cancelled while we were waiting
@@ -532,7 +532,7 @@ func (c *Client) raceForConnection(ctx context.Context, eligible []config.Usenet
 			// goroutine won), return our connection to the pool immediately.
 			select {
 			case resultCh <- result{conn, p, nil}:
-				// Slot is still held — the receiver will call returnOrReleaseConn.
+				// Slot is still held; the receiver will call returnOrReleaseConn.
 			case <-innerCtx.Done():
 				c.put(conn, p) // releases slot
 			}
@@ -560,7 +560,7 @@ func (c *Client) raceForConnection(ctx context.Context, eligible []config.Usenet
 		select {
 		case r, ok := <-resultCh:
 			if !ok {
-				// Channel closed — all goroutines have finished.
+				// Channel closed; all goroutines have finished.
 				if winConn != nil {
 					return winConn, winProvider, nil
 				}
@@ -575,14 +575,14 @@ func (c *Client) raceForConnection(ctx context.Context, eligible []config.Usenet
 					winProvider = r.provider
 					cancel() // Tell losing goroutines to stop ASAP.
 				} else {
-					// Extra winner arrived before cancel propagated — release it.
+					// Extra winner arrived before cancel propagated; release it.
 					c.returnOrReleaseConn(r.conn, r.provider)
 				}
 			} else if r.err != nil {
 				lastErr = r.err
 			}
 		case <-ctx.Done():
-			// Parent context cancelled — cancel inner, drain remaining connections
+			// Parent context cancelled; cancel inner, drain remaining connections
 			// in background so we don't block the caller.
 			cancel()
 			go func() {
@@ -987,7 +987,7 @@ func (c *Client) BatchStat(ctx context.Context, messageIDs []string) (*BatchStat
 			defer wg.Done()
 			// Hold one bank token for this worker's lifetime. With many
 			// in-flight callers, late workers block here until a token frees
-			// up — capping total concurrent connections at bank.Capacity().
+			// up; capping total concurrent connections at bank.Capacity().
 			release, err := c.repairBank.acquire(ctx)
 			if err != nil {
 				for ch := range chunksCh {

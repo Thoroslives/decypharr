@@ -38,7 +38,7 @@ func TestDecodeAuthHeader(t *testing.T) {
 			wantPass: "er2",
 		},
 		{
-			// Empty payload — base64 of "" is "", decoded back is "". No colon.
+			// Empty payload; base64 of "" is "", decoded back is "". No colon.
 			// PRE-FIX: panic.
 			name:         "empty payload (the panic case)",
 			header:       "Basic ",
@@ -56,7 +56,7 @@ func TestDecodeAuthHeader(t *testing.T) {
 		{
 			// "Bearer xyz" splits to ["Bearer", "xyz"] (len == 2, so it doesn't
 			// take the early-return path). "xyz" then fails base64 decoding
-			// because the length isn't a multiple of 4 — surfaces as decode err.
+			// because the length isn't a multiple of 4; surfaces as decode err.
 			name:    "non-Basic scheme (token not valid base64)",
 			header:  "Bearer xyz",
 			wantErr: true,
@@ -73,7 +73,7 @@ func TestDecodeAuthHeader(t *testing.T) {
 			defer func() {
 				if r := recover(); r != nil {
 					if tt.mustNotPanic {
-						t.Fatalf("decodeAuthHeader panicked on %q: %v (regression — function must return an error, not panic)", tt.header, r)
+						t.Fatalf("decodeAuthHeader panicked on %q: %v (regression; function must return an error, not panic)", tt.header, r)
 					}
 					panic(r)
 				}

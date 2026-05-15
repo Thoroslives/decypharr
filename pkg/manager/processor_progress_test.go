@@ -9,7 +9,7 @@ import (
 // TestApplyRDProgressLeavesLocalFieldsUntouched guards the core Fix F
 // invariant: when processQueuedTorrent polls the debrid provider and writes
 // the provider's "I have cached X% of this torrent" claim onto an Entry,
-// that write must NOT touch Entry.Progress or Entry.Speed — those are
+// that write must NOT touch Entry.Progress or Entry.Speed; those are
 // reserved for the local-pull worker's truthful counters written by
 // downloader.go.
 //
@@ -79,7 +79,7 @@ func TestApplyRDProgressLeavesLocalFieldsUntouched(t *testing.T) {
 			if entry.RDSpeed != tt.wantRDSpeed {
 				t.Errorf("RDSpeed: got %v want %v", entry.RDSpeed, tt.wantRDSpeed)
 			}
-			// Local-pull truth invariants — must be untouched.
+			// Local-pull truth invariants; must be untouched.
 			if entry.Progress != beforeProgress {
 				t.Errorf("Progress mutated: got %v want %v (RD-side write polluted local field)",
 					entry.Progress, beforeProgress)
@@ -122,7 +122,7 @@ func TestApplyRDProgressUpdatesActiveProviderPlacement(t *testing.T) {
 //
 // Pre-fix the struct literal wrote `RDProgress: t.Progress` (and
 // `placement.Progress = t.Progress`) directly, so a debrid-side 87% claim was
-// stored as RDProgress=87.0 instead of 0.87 — the internal /api/torrents
+// stored as RDProgress=87.0 instead of 0.87; the internal /api/torrents
 // endpoint serializing the raw struct would render "RD: 8700%". Caught by
 // /simplify pass.
 //

@@ -96,11 +96,11 @@ func TestHandleTorrentsDeleteCancelsBeforeUnlink(t *testing.T) {
 	select {
 	case <-workerExited:
 	case <-time.After(time.Second):
-		t.Fatal("worker did not observe ctx cancellation — handler did not call CancelDownload")
+		t.Fatal("worker did not observe ctx cancellation; handler did not call CancelDownload")
 	}
 
 	if cancelTimeUnixNano.Load() == 0 {
-		t.Fatal("worker exited without recording cancel time — order assertion impossible")
+		t.Fatal("worker exited without recording cancel time; order assertion impossible")
 	}
 
 	// Capture delete-time AFTER the handler returns. Queue.Delete is
@@ -109,12 +109,12 @@ func TestHandleTorrentsDeleteCancelsBeforeUnlink(t *testing.T) {
 
 	// Sanity-check the queue row is gone.
 	if _, err := strg.GetQueued(hash); err == nil {
-		t.Error("queue entry still present after DELETE handler — Queue.Delete was not invoked")
+		t.Error("queue entry still present after DELETE handler; Queue.Delete was not invoked")
 	}
 
 	// Order check: cancel time must be <= delete-observation time.
 	if cancelTimeUnixNano.Load() > deleteObservedNano {
-		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d) — Fix B ordering regression",
+		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d); Fix B ordering regression",
 			cancelTimeUnixNano.Load(), deleteObservedNano)
 	}
 
@@ -174,7 +174,7 @@ func TestHandleTorrentsDeleteIsNoOpWithoutRegisteredWorker(t *testing.T) {
 // We assert by giving the seeded entry a synthetic provider whose
 // DeleteTorrent would be invoked. Because the manager built via NewForTest
 // has no real provider clients wired up, RemoveTorrentPlacements is a
-// no-op at the client layer — what we're really asserting here is that
+// no-op at the client layer; what we're really asserting here is that
 // the handler reaches the RemoveTorrentPlacements branch for entries with
 // providers. The behavioral assertion (sync loop doesn't re-import) is
 // covered at the soak-test layer in production.
@@ -222,7 +222,7 @@ func TestHandleTorrentsDeleteFiresRDCleanup(t *testing.T) {
 	}
 
 	// The local queue entry must be gone. The RD-side cleanup goroutine is
-	// fire-and-forget and may still be running, but we don't block on it —
+	// fire-and-forget and may still be running, but we don't block on it;
 	// production behavior is identical.
 	if _, err := strg.GetQueued(hash); err == nil {
 		t.Error("queue entry still present after DELETE handler")

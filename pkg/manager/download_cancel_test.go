@@ -67,7 +67,7 @@ func TestDownloadCancelWaitTimeout(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	m := &Manager{downloadCancels: xsync.NewMap[string, *downloadHandle]()}
 	_, _ = m.RegisterDownload("hash-a", context.Background())
-	// Don't cancel, don't release — Wait should hit timeout.
+	// Don't cancel, don't release; Wait should hit timeout.
 	err := m.WaitForDownloadExit("hash-a", 50*time.Millisecond)
 	if err != context.DeadlineExceeded {
 		t.Errorf("Wait without release must return DeadlineExceeded, got %v", err)
@@ -84,5 +84,5 @@ func TestDownloadCancelDoubleCancel(t *testing.T) {
 	m.CancelDownload("hash-a")
 	m.CancelDownload("hash-a") // must not panic
 	release()
-	release() // must not panic — release is idempotent via select-default close
+	release() // must not panic; release is idempotent via select-default close
 }

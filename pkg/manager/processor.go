@@ -222,7 +222,7 @@ func (m *Manager) submitProcessingJob(entry *storage.Entry, jobType JobType) {
 // processJob is the dispatcher passed to JobQueue. It maps a *Job back to
 // the existing per-protocol processing entrypoints and recovers from panics
 // so a single bad job doesn't kill a worker permanently. JobQueue's own
-// workers have no recover() — without this wrapper, a panicked processFunc
+// workers have no recover(); without this wrapper, a panicked processFunc
 // would tear down the worker goroutine and shrink the pool.
 func (m *Manager) processJob(ctx context.Context, job *Job) {
 	defer func() {

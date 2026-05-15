@@ -172,7 +172,7 @@ func (sf *SegmentFetcher) doFetch(ctx context.Context, segIdx int) error {
 	downloadCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// ExecuteWithFailover already retries per provider and across providers —
+	// ExecuteWithFailover already retries per provider and across providers;
 	// a single call is sufficient.  An outer retry loop would multiply the
 	// total attempts by retries×providers, leading to very long failure times.
 	err := sf.client.ExecuteWithFailover(downloadCtx, func(conn *nntp.Connection) error {
@@ -188,7 +188,7 @@ func (sf *SegmentFetcher) doFetch(ctx context.Context, segIdx int) error {
 			return err
 		}
 
-		// Treat zero-byte articles as missing — the article exists on the
+		// Treat zero-byte articles as missing; the article exists on the
 		// server but its body is empty/corrupted after yEnc decoding.
 		if n == 0 {
 			return &nntp.Error{

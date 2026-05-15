@@ -439,7 +439,7 @@ func (r *Reader) readFiles() error {
 			retry.LastErrorOnly(true),
 		)
 		if err != nil || len(headerData) < 7 {
-			// EOF or unrecoverable read error — stop iteration.
+			// EOF or unrecoverable read error; stop iteration.
 			break
 		}
 

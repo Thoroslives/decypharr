@@ -14,7 +14,7 @@ import (
 //   - DlSpeed and UpSpeed both returned t.Speed unconditionally (Speed could
 //     reflect debrid-side ingestion rather than local pull).
 //   - TotalDownloaded returned t.Bytes (mirrors debrid claim, not bytes on disk).
-//   - TotalUploaded also returned t.Bytes (we never upload — was a copy-paste).
+//   - TotalUploaded also returned t.Bytes (we never upload; was a copy-paste).
 //
 // Post-fix the same state machine as convertToQBitTorrentTorrent applies:
 //
@@ -36,7 +36,7 @@ func TestGetTorrentPropertiesHonestProgress(t *testing.T) {
 		{
 			// RD-side ingestion in flight, no local-pull worker started.
 			// Pre-fix: DlSpeed = RD's caching speed, TotalDownloaded = t.Bytes.
-			// Post-fix: zero — nothing has touched local disk yet.
+			// Post-fix: zero; nothing has touched local disk yet.
 			name: "RD caching, no local-pull worker (anti-fabrication)",
 			entry: storage.Entry{
 				Size:          size,
@@ -114,7 +114,7 @@ func TestGetTorrentPropertiesHonestProgress(t *testing.T) {
 	}
 
 	// GetTorrentProperties doesn't read any QBit state, so a zero-value
-	// receiver suffices — no IsolateConfig needed for this pure-conversion
+	// receiver suffices; no IsolateConfig needed for this pure-conversion
 	// surface.
 	q := &QBit{}
 

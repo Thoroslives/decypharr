@@ -648,7 +648,7 @@ func (m *Manager) RegisterDownload(infohash string, parent context.Context) (con
 	h := &downloadHandle{cancel: cancel, done: make(chan struct{})}
 	m.downloadCancels.Store(infohash, h)
 	release := func() {
-		cancel() // idempotent — repeated cancels are no-ops on context.WithCancel
+		cancel() // idempotent; repeated cancels are no-ops on context.WithCancel
 		m.downloadCancels.Delete(infohash)
 		// Close done exactly once. select-default makes the close idempotent
 		// even if release is invoked from multiple goroutines.

@@ -462,7 +462,7 @@ func (dls *Downloaders) removeClosed() {
 }
 
 // countErrors tracks errors and resets on success.
-// Context cancellation (intentional stop/close) is never counted — it must not
+// Context cancellation (intentional stop/close) is never counted; it must not
 // trip the circuit breaker, because the downloader was halted on purpose.
 func (dls *Downloaders) countErrors(n int64, err error) {
 	dls.mu.Lock()
@@ -476,7 +476,7 @@ func (dls *Downloaders) countErrors(n int64, err error) {
 		return
 	}
 	if err != nil {
-		// Intentional stop/shutdown — not a real failure.
+		// Intentional stop/shutdown; not a real failure.
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return
 		}
@@ -538,7 +538,7 @@ func (dls *Downloaders) kickWaiters() {
 
 	// If the shared context is already canceled, fail all remaining waiters
 	// immediately instead of spawning downloaders that exit instantly and
-	// call kickWaiters() again — that creates a CPU-spinning goroutine loop.
+	// call kickWaiters() again; that creates a CPU-spinning goroutine loop.
 	if dls.ctx.Err() != nil {
 		ctxErr := dls.ctx.Err()
 		for _, w := range remaining {
@@ -708,7 +708,7 @@ func (dls *Downloaders) checkIdleTimeout() bool {
 	dls.idle = true
 
 	// Reset error budget so the next session starts fresh.
-	// Errors from the previous session must not carry into a resumed session —
+	// Errors from the previous session must not carry into a resumed session;
 	// that would shrink the error budget and could immediately trip the circuit
 	// breaker the next time the user starts playback.
 	dls.errorCount = 0
@@ -783,7 +783,7 @@ func (dls *Downloaders) StopAll() {
 
 // ensureKickerRunningLocked restarts the kicker goroutine if it has stopped.
 // Caller must hold dls.mu. Refuses to start a new kicker while the session
-// is closed or being torn down — that would race against StopAll()/Close()
+// is closed or being torn down; that would race against StopAll()/Close()
 // waiting on the previous kicker's exit sentinel.
 func (dls *Downloaders) ensureKickerRunningLocked() {
 	if dls.closed || dls.stopping {

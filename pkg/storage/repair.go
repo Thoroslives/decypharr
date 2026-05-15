@@ -201,8 +201,8 @@ const (
 )
 
 // BrokenFile carries everything the repair pipeline needs to act on a single
-// broken file: where it lives in storage, which infohash it belongs to, and —
-// when an Arr knows about it — the Arr-side identifiers needed to delete and
+// broken file: where it lives in storage, which infohash it belongs to, and,
+// when an Arr knows about it, the Arr-side identifiers needed to delete and
 // re-search without another lookup.
 type BrokenFile struct {
 	EntryName string          `json:"entry_name"`
@@ -225,7 +225,7 @@ type BrokenFile struct {
 
 // EntryHealth is the source of truth for repair decisions. It is keyed by
 // EntryName (the folder-name shared across files of the same release) and is
-// updated live during a sweep — once when probing starts, once when it
+// updated live during a sweep; once when probing starts, once when it
 // finishes.
 type EntryHealth struct {
 	EntryName     string          `json:"entry_name"`

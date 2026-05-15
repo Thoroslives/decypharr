@@ -84,12 +84,12 @@ func TestJobQueueRespectsMaxWorkers(t *testing.T) {
 //
 // Strategy: build a minimal Manager with no queue, then dispatch a torrent
 // job whose Entry triggers processQueuedTorrent. The first nil-deref happens
-// when processQueuedTorrent calls m.queue.Update — that panic must be caught
+// when processQueuedTorrent calls m.queue.Update; that panic must be caught
 // by processJob's defer-recover and processJob must return normally.
 func TestProcessJobRecoversPanics(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 
-	m := &Manager{logger: zerolog.Nop()} // queue: nil — guaranteed panic source
+	m := &Manager{logger: zerolog.Nop()} // queue: nil; guaranteed panic source
 
 	// Entry with no active provider so processQueuedTorrent goes down the
 	// "no active placement found" branch, which calls m.queue.Update and
@@ -116,7 +116,7 @@ func TestProcessJobRecoversPanics(t *testing.T) {
 
 	select {
 	case <-done:
-		// processJob returned cleanly — the panic was caught.
+		// processJob returned cleanly; the panic was caught.
 	case <-time.After(2 * time.Second):
 		t.Fatal("processJob did not return within 2s; recover() likely missing")
 	}

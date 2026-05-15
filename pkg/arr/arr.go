@@ -81,7 +81,7 @@ func New(name, host, token string, cleanup, skipRepair bool, downloadUncached *b
 }
 
 // RequestCtx issues an HTTP request bound to ctx. Cancellation of ctx
-// cancels the in-flight HTTP call — this is what lets the repair pipeline
+// cancels the in-flight HTTP call; this is what lets the repair pipeline
 // abort long Sonarr enumerations when a user presses Stop.
 func (a *Arr) RequestCtx(ctx context.Context, method, endpoint string, payload interface{}, res any) (*http.Response, error) {
 	if a.Token == "" || a.Host == "" {

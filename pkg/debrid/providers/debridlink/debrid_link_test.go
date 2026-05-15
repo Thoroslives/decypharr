@@ -11,7 +11,7 @@ import (
 // clause fall off the end of the if/else-if chain on unexpected statuses
 // (the bug PR #270 fixed in RealDebrid's CheckStatus loop). DebridLink's
 // status mapping is binary (100 = downloaded, everything else = downloading)
-// and therefore exhaustive — there's no fall-through hole. This test locks
+// and therefore exhaustive; there's no fall-through hole. This test locks
 // the contract in so future refactors don't accidentally introduce a third
 // path that doesn't terminate.
 func TestGetDebridLinkStatusBinaryMapping(t *testing.T) {

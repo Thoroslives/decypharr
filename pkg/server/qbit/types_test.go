@@ -16,7 +16,7 @@ import (
 // processQueuedTorrent with the upstream debrid provider's own ingestion
 // progress (RD reporting how much of the torrent it had cached, not how many
 // bytes had been pulled to local disk). The result was that Radarr/Sonarr saw
-// "downloaded" bytes that did not exist on disk — a 1,800x discrepancy
+// "downloaded" bytes that did not exist on disk; a 1,800x discrepancy
 // observed during the 2026-05-14/15 marathon debug session.
 //
 // Post-fix, RD-side ingestion progress lives in Entry.RDProgress /
@@ -47,7 +47,7 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 				RDSpeed:       50_000_000,
 				IsDownloading: false,
 				IsComplete:    false,
-				// State left zero-value — entry has not been marked anything yet.
+				// State left zero-value; entry has not been marked anything yet.
 			},
 			wantProgress:   0,
 			wantDlspeed:    0,
@@ -161,7 +161,7 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 				t.Errorf("Progress: got %v want %v", got.Progress, tt.wantProgress)
 			}
 			if math.IsNaN(got.Progress) || math.IsInf(got.Progress, 0) {
-				t.Errorf("Progress is non-finite (%v) — Sanitize must zero NaN/Inf before encoding", got.Progress)
+				t.Errorf("Progress is non-finite (%v); Sanitize must zero NaN/Inf before encoding", got.Progress)
 			}
 			if got.Dlspeed != tt.wantDlspeed {
 				t.Errorf("Dlspeed: got %d want %d", got.Dlspeed, tt.wantDlspeed)
