@@ -8,6 +8,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/logger"
+	debridTypes "github.com/sirrobot01/decypharr/pkg/debrid/types"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 	"github.com/sirrobot01/decypharr/pkg/usenet/parser"
 )
@@ -18,17 +19,19 @@ type JobType string
 const (
 	JobTypeTorrent JobType = "torrent"
 	JobTypeNZB     JobType = "nzb"
+	JobTypeNew     JobType = "new"
 )
 
 // Job represents a unified processing job for both torrents and NZBs
 type Job struct {
-	ID        string
-	Type      JobType
-	Request   *ImportRequest               // The original import request
-	NZBMeta   *storage.NZB                 // NZB metadata (set after parse, before worker processes)
-	NZBGroups map[string]*parser.FileGroup // NZB file groups (set after parse)
-	Entry     *storage.Entry               // Entry created during processing
-	CreatedAt time.Time
+	ID            string
+	Type          JobType
+	Request       *ImportRequest               // The original import request
+	NZBMeta       *storage.NZB                 // NZB metadata (set after parse, before worker processes)
+	NZBGroups     map[string]*parser.FileGroup // NZB file groups (set after parse)
+	Entry         *storage.Entry               // Entry created during processing
+	DebridTorrent *debridTypes.Torrent         // set for JobTypeNew (processNewTorrent's second arg)
+	CreatedAt     time.Time
 }
 
 // NewJob creates a new job

@@ -126,8 +126,19 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
 	}
 
-	// Parse in background
-	go m.processNewTorrent(torrent, debridTorrent)
+	// Route fresh-submission processing through the JobQueue so bursts
+	// (e.g. Radarr MissingMoviesSearch) honor max_downloads. Pre-fix this
+	// was an ungated `go m.processNewTorrent(...)` per submission.
+	job := &Job{
+		ID:            torrent.InfoHash,
+		Type:          JobTypeNew,
+		Entry:         torrent,
+		DebridTorrent: debridTorrent,
+		CreatedAt:     time.Now(),
+	}
+	if err := m.jobQueue.Submit(job); err != nil {
+		m.logger.Warn().Err(err).Str("infohash", torrent.InfoHash).Msg("jobQueue submit failed (new torrent)")
+	}
 
 	return nil
 }
@@ -229,6 +240,10 @@ func (m *Manager) processJob(ctx context.Context, job *Job) {
 	case JobTypeNZB:
 		if job.Entry != nil {
 			m.processQueuedNZB(job.Entry)
+		}
+	case JobTypeNew:
+		if job.Entry != nil && job.DebridTorrent != nil {
+			m.processNewTorrent(job.Entry, job.DebridTorrent)
 		}
 	}
 }
@@ -353,7 +368,7 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 	_ = m.queue.Update(entry)
 	// Check if done or failed
 	if debridTorrent.Status == debridTypes.TorrentStatusDownloaded {
-		go m.processAction(entry)
+		m.processAction(entry)
 	}
 }
 
@@ -440,7 +455,7 @@ func (m *Manager) processNewTorrent(torrent *storage.Entry, debridTorrent *debri
 	}
 
 	// Parse post-download action
-	go m.processAction(torrent)
+	m.processAction(torrent)
 }
 
 // SendToDebrid submits a magnet to debrid service(s) - replaces debrid.Parse

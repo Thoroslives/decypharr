@@ -127,6 +127,62 @@ func TestProcessJobRecoversPanics(t *testing.T) {
 	m.processJob(ctx, nil)
 }
 
+// TestAddNewTorrentRespectsJobQueueCap guards Fix A-bis: fresh submissions
+// (the AddNewTorrent path, typical of a Radarr MissingMoviesSearch burst)
+// are now routed through the JobQueue via JobTypeNew, so a burst must not
+// exceed max_downloads concurrent workers. Pre-fix this path was an ungated
+// `go m.processNewTorrent(...)` per submission, bypassing Fix A's cap.
+//
+// See: /brain/05-Projects/2026-05-15-decypharr-fork-soak-findings.md
+func TestAddNewTorrentRespectsJobQueueCap(t *testing.T) {
+	testutil.IsolateConfig(t, t.TempDir())
+
+	const (
+		maxWorkers = 2
+		totalJobs  = 6
+	)
+	var peak, current int32
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(totalJobs)
+
+	processFunc := func(ctx context.Context, job *Job) {
+		defer wg.Done()
+		c := atomic.AddInt32(&current, 1)
+		defer atomic.AddInt32(&current, -1)
+		for {
+			p := atomic.LoadInt32(&peak)
+			if c <= p || atomic.CompareAndSwapInt32(&peak, p, c) {
+				break
+			}
+		}
+		<-release
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q := NewJobQueue(ctx, maxWorkers, processFunc)
+	defer q.Close()
+
+	for i := 0; i < totalJobs; i++ {
+		job := newTestJob(JobTypeNew, fmt.Sprintf("new-%d", i))
+		if err := q.Submit(job); err != nil {
+			t.Fatalf("submit %d: %v", i, err)
+		}
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	close(release)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&peak); got > maxWorkers {
+		t.Errorf("peak concurrency = %d, want <= %d (JobTypeNew burst not capped)", got, maxWorkers)
+	}
+	if got := atomic.LoadInt32(&peak); got == 0 {
+		t.Errorf("peak concurrency = 0; expected jobs to actually run")
+	}
+}
+
 // TestJobQueueCloseDrains guards Fix A: Close blocks until in-flight workers
 // finish (cleanly drains), and post-Close Submit returns an error. The
 // production path is Manager.Stop -> jobQueue.Close before scheduler shutdown.
