@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -289,7 +290,171 @@ func (q *Queue) PushRequest(req *ImportRequest) error {
 
 	q.queue = append(q.queue, req)
 	q.cond.Signal() // Wake up any waiting Pop()
+
+	// Durable mirror (best-effort). The in-memory slice above stays the
+	// primary path so non-restart behaviour is byte-for-byte unchanged; the
+	// persisted record only matters when the process restarts before a
+	// storage.Entry exists for this grab (the silent-grab-loss bug). Only
+	// magnet-backed requests are persisted: the requeue path that triggers
+	// this loss (AddNewTorrent too_many_active_downloads -> ReQueue) always
+	// has a Magnet, and the key IS the infohash.
+	if req.Magnet != nil && req.Magnet.InfoHash != "" && q.storage != nil {
+		rec := requeueRecordFromRequest(req)
+		if err := q.storage.PutRequeue(strings.ToLower(req.Magnet.InfoHash), rec); err != nil {
+			q.logger.Warn().
+				Err(err).
+				Str("infohash", req.Magnet.InfoHash).
+				Msg("failed to persist requeue record (in-memory queue still holds it)")
+		}
+	}
 	return nil
+}
+
+// requeueRecordFromRequest projects an ImportRequest down to the durable
+// fields. The live *arr.Arr is intentionally dropped (only Arr.Name is kept);
+// see storage.RequeueRecord doc.
+func requeueRecordFromRequest(req *ImportRequest) *storage.RequeueRecord {
+	rec := &storage.RequeueRecord{
+		MagnetLink:       req.Magnet.Link,
+		MagnetName:       req.Magnet.Name,
+		MagnetInfoHash:   req.Magnet.InfoHash,
+		MagnetSize:       req.Magnet.Size,
+		Action:           string(req.Action),
+		DownloadFolder:   req.DownloadFolder,
+		DownloadUncached: req.DownloadUncached,
+		CallBackUrl:      req.CallBackUrl,
+		SkipMultiSeason:  req.SkipMultiSeason,
+		SelectedDebrid:   req.SelectedDebrid,
+		Type:             string(req.Type),
+		PersistedAt:      time.Now(),
+	}
+	if req.Arr != nil {
+		rec.ArrName = req.Arr.Name
+	}
+	return rec
+}
+
+// DeletePersistedRequeue removes the durable requeue record for infohash. It
+// is called on the success path (a slot freed and a real storage.Entry now
+// owns the grab) as a fast-path cleanup. Correctness does NOT depend on this
+// firing: DrainPersistedRequeue is self-healing (TTL + already-owned +
+// arr-resolve checks) so a missed delete is reclaimed on the next restart
+// rather than re-spawning a zombie grab.
+func (q *Queue) DeletePersistedRequeue(infohash string) error {
+	if q.storage == nil || infohash == "" {
+		return nil
+	}
+	return q.storage.DeleteRequeue(strings.ToLower(infohash))
+}
+
+// DrainPersistedRequeue rebuilds importable requests from the durable requeue
+// bucket after a restart. It is self-healing by design: a requeued request can
+// leave the system via at least five paths (slot frees -> entry; arr cancel;
+// remove_stalled reap; unservable discard; user/qbit/api delete) and wiring a
+// delete on every one is fragile. So rather than trust perfect deletion, every
+// record is validated on drain and stale ones are discarded in place:
+//
+//   - older than requeueTTL (2 * removeStalledAfter): a still-valid requeue
+//     cannot outlive the stalled reaper, so discard.
+//   - a live storage.Entry already owns the infohash (entries OR queue
+//     bucket): already in flight, discard to avoid a duplicate/zombie grab.
+//   - ArrName no longer resolves to exactly one configured arr: discard with
+//     a Warn rather than guess a library (no nil-deref, no wrong-library
+//     misfile).
+//
+// Surviving records are reconstructed into *ImportRequest (rebuilding the
+// *arr.Arr from the resolved arr and the *utils.Magnet from persisted fields)
+// and returned for the caller to re-enqueue. resolveArr maps an arr name to a
+// configured *arr.Arr (nil when unresolvable) - production passes m.arr.Get.
+func (q *Queue) DrainPersistedRequeue(resolveArr func(name string) *arr.Arr) ([]*ImportRequest, error) {
+	if q.storage == nil {
+		return nil, nil
+	}
+
+	// 2 * removeStalledAfter. If removeStalledAfter is unset (0), the reaper
+	// is disabled, so the TTL guard is disabled too (only the already-owned
+	// and arr-resolve guards apply).
+	requeueTTL := 2 * q.removeStalledAfter
+	now := time.Now()
+
+	var (
+		recovered []*ImportRequest
+		stale     []string
+	)
+
+	err := q.storage.ForEachRequeue(func(key string, rec *storage.RequeueRecord) error {
+		infohash := rec.MagnetInfoHash
+		if infohash == "" {
+			infohash = key
+		}
+
+		// TTL guard (skip when reaper disabled).
+		if requeueTTL > 0 && now.Sub(rec.PersistedAt) > requeueTTL {
+			stale = append(stale, key)
+			q.logger.Warn().
+				Str("infohash", infohash).
+				Dur("ttl", requeueTTL).
+				Msg("discarding expired persisted requeue record")
+			return nil
+		}
+
+		// Already-owned guard.
+		if q.storage.RequeueOwnedByEntry(infohash) {
+			stale = append(stale, key)
+			q.logger.Debug().
+				Str("infohash", infohash).
+				Msg("discarding persisted requeue record (live entry already owns it)")
+			return nil
+		}
+
+		// Arr-resolution guard (Concern 5: discard, do not guess).
+		var resolved *arr.Arr
+		if resolveArr != nil && rec.ArrName != "" {
+			resolved = resolveArr(rec.ArrName)
+		}
+		if resolved == nil {
+			stale = append(stale, key)
+			q.logger.Warn().
+				Str("infohash", infohash).
+				Str("arr", rec.ArrName).
+				Msg("discarding persisted requeue record (arr no longer resolves)")
+			return nil
+		}
+
+		// Reconstruct the importable request.
+		magnet := &utils.Magnet{
+			InfoHash: rec.MagnetInfoHash,
+			Name:     rec.MagnetName,
+			Size:     rec.MagnetSize,
+			Link:     rec.MagnetLink,
+		}
+		req := &ImportRequest{
+			Id:               uuid.New().String(),
+			Status:           "queued",
+			DownloadFolder:   rec.DownloadFolder,
+			SelectedDebrid:   rec.SelectedDebrid,
+			Magnet:           magnet,
+			Arr:              resolved,
+			Action:           config.DownloadAction(rec.Action),
+			DownloadUncached: rec.DownloadUncached,
+			CallBackUrl:      rec.CallBackUrl,
+			SkipMultiSeason:  rec.SkipMultiSeason,
+			Type:             ImportType(rec.Type),
+		}
+		recovered = append(recovered, req)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	for _, key := range stale {
+		if derr := q.storage.DeleteRequeue(key); derr != nil {
+			q.logger.Warn().Err(derr).Str("key", key).Msg("failed to delete stale requeue record")
+		}
+	}
+
+	return recovered, nil
 }
 
 func (q *Queue) PopRequest() (*ImportRequest, error) {

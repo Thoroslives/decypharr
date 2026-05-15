@@ -6,17 +6,58 @@ import (
 	"github.com/go-co-op/gocron/v2"
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
+	"github.com/sirrobot01/decypharr/pkg/arr"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 )
 
 // runInitialCalls performs any initial calls of worker functions
 // for example, call the trackAvailableSlots and processQueuedEntries functions once
 func (m *Manager) runInitialCalls(ctx context.Context) {
+	// Drain the durable requeue bucket BEFORE the recovery loop. Requests
+	// bounced back to the queue on too_many_active_downloads only lived in
+	// the in-memory slice pre-fix; a restart dropped them with no
+	// storage.Entry for processQueuedEntries to recover (silent grab loss).
+	// This re-enters the survivors into q.queue first so they are picked up
+	// by the normal processing path.
+	m.drainPersistedRequeue()
+
 	// Initial call to track available slots
 	go m.refreshDownloadLinks(ctx)
 	go m.trackAvailableSlots(ctx)
 	go m.processQueuedEntries()
 	go m.syncAccounts()
+}
+
+// drainPersistedRequeue rebuilds importable requests from the durable requeue
+// bucket and re-enqueues the survivors. Arr resolution is delegated to
+// m.arr.Get (nil when the configured arr no longer exists), so a grab whose
+// arr was deleted/renamed is discarded rather than revived against a missing
+// target. Best-effort: a re-push that fails (e.g. queue full) is logged; the
+// durable record stays until it is either re-drained or self-healed away.
+func (m *Manager) drainPersistedRequeue() {
+	if m.queue == nil {
+		return
+	}
+	requests, err := m.queue.DrainPersistedRequeue(func(name string) *arr.Arr {
+		return m.arr.Get(name)
+	})
+	if err != nil {
+		m.logger.Warn().Err(err).Msg("failed to drain persisted requeue bucket")
+		return
+	}
+	for _, req := range requests {
+		if err := m.queue.PushRequest(req); err != nil {
+			m.logger.Warn().
+				Err(err).
+				Str("infohash", req.Magnet.InfoHash).
+				Msg("failed to re-enqueue persisted requeue request")
+		}
+	}
+	if len(requests) > 0 {
+		m.logger.Info().
+			Int("count", len(requests)).
+			Msg("recovered persisted requeue requests after restart")
+	}
 }
 
 func (m *Manager) syncAccounts() {
