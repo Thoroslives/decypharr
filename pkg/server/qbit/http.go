@@ -4,22 +4,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
+	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
-
-// deleteWorkerWaitTimeout caps how long the qBit DELETE handler will block
-// waiting for an in-flight download worker to exit before it proceeds with
-// unlink. 5s is enough for grab to honor ctx cancel + close its FD on a
-// healthy server; if it's not enough, we log and unlink anyway so DELETE
-// stays responsive. The orphan-FD case is what we're guarding against
-// (Fix B), not perfect ordering — if a worker is genuinely stuck, the user
-// has bigger problems.
-const deleteWorkerWaitTimeout = 5 * time.Second
 
 func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -202,8 +193,7 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 		// from being removed and stranding GBs of data. CancelDownload is a
 		// no-op for hashes with no registered worker, so it's safe to call
 		// unconditionally.
-		q.manager.CancelDownload(hash)
-		if err := q.manager.WaitForDownloadExit(hash, deleteWorkerWaitTimeout); err != nil {
+		if err := q.manager.CancelAndWait(hash, manager.DeleteWorkerWaitTimeout); err != nil {
 			q.logger.Warn().
 				Err(err).
 				Str("infohash", hash).

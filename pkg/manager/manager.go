@@ -694,6 +694,24 @@ func (m *Manager) PendingJobIDs() map[string]struct{} {
 	return m.jobQueue.PendingIDs()
 }
 
+// DeleteWorkerWaitTimeout caps how long a DELETE handler blocks waiting for
+// an in-flight local-pull worker to exit before it unlinks files. This is the
+// single canonical home for that bound; every DELETE handler passes it to
+// CancelAndWait so the value stays consistent across the qBit-compat and
+// internal API paths.
+const DeleteWorkerWaitTimeout = 5 * time.Second
+
+// CancelAndWait cancels any in-flight worker for infohash and blocks until it
+// exits or the timeout elapses. It is CancelDownload followed by
+// WaitForDownloadExit: the single gate every DELETE handler uses so the
+// cancel-before-unlink contract lives in one place. Returns nil on clean exit
+// (or when no worker is registered) and context.DeadlineExceeded if a
+// registered worker does not exit within timeout.
+func (m *Manager) CancelAndWait(infohash string, timeout time.Duration) error {
+	m.CancelDownload(infohash)
+	return m.WaitForDownloadExit(infohash, timeout)
+}
+
 // WaitForDownloadExit blocks until the registered download for infohash exits
 // or the timeout elapses. Returns nil on clean exit, context.DeadlineExceeded
 // on timeout, or nil if no download is registered (nothing to wait for).
