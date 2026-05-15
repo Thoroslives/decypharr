@@ -90,12 +90,16 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	// arrs configuring decypharr as a qBittorrent backend still expect all
 	// "their" downloads visible, regardless of protocol.
 	torrents := q.manager.Queue().ListFilter(category, config.ProtocolAll, storage.TorrentState(state), hashes, "added_on", false)
+	// Snapshot the JobQueue's pending set once (one lock acquisition) instead
+	// of probing per entry: this handler returns the full tracked library and
+	// is polled every few seconds, so a per-entry lock would contend O(N) with
+	// the workers that dispatch downloads. An entry whose job is still pending
+	// (waiting for a free worker slot) is reported queuedDL, not stalledDL, so
+	// Radarr treats it as queued rather than stalled.
+	pending := q.manager.PendingJobIDs()
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
-		// held: this entry's job is still pending in the JobQueue (waiting
-		// for a free worker slot). When true the conversion reports queuedDL
-		// instead of stalledDL so Radarr treats it as queued, not stalled.
-		held := q.manager.IsJobPending(t.InfoHash)
+		_, held := pending[t.InfoHash]
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t, held)
 	}
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)

@@ -237,13 +237,13 @@ func TestJobQueueCloseDrains(t *testing.T) {
 	}
 }
 
-// TestJobQueueIsPending guards Fix 2 (BIS-2): IsPending must report true ONLY
-// while a job is still in the not-yet-popped slice, and false once a worker
-// has popped it (in-flight) or it never existed. This is the real "held in
-// JobQueue, not yet picked up by a worker" discriminator the qBit state
-// mapping keys off; it must NOT match a job a worker is already running
-// (that entry will make progress and is not "queued waiting for a slot").
-func TestJobQueueIsPending(t *testing.T) {
+// TestJobQueuePendingIDs guards Fix 2 (BIS-2): PendingIDs must contain a job
+// ID ONLY while it is still in the not-yet-popped slice, and must NOT contain
+// a job a worker has already popped (in-flight) or one that never existed.
+// This is the real "held in JobQueue, not yet picked up by a worker"
+// discriminator the qBit state mapping keys off; a job a worker is already
+// running will make progress and is not "queued waiting for a slot".
+func TestJobQueuePendingIDs(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 
 	started := make(chan struct{})
@@ -261,9 +261,9 @@ func TestJobQueueIsPending(t *testing.T) {
 	q := NewJobQueue(ctx, 1, processFunc)
 	defer q.Close()
 
-	// Unknown id is never pending.
-	if q.IsPending("nope") {
-		t.Error("IsPending(unknown) = true, want false")
+	// Empty queue: nothing pending, unknown id absent.
+	if ids := q.PendingIDs(); len(ids) != 0 {
+		t.Errorf("PendingIDs on empty queue = %v, want empty", ids)
 	}
 
 	running := newTestJob(JobTypeNew, "running")
@@ -277,26 +277,35 @@ func TestJobQueueIsPending(t *testing.T) {
 		t.Fatalf("submit pending: %v", err)
 	}
 
+	ids := q.PendingIDs()
 	// "pending" is queued behind the busy single worker -> still pending.
-	if !q.IsPending("pending") {
-		t.Error("IsPending(pending) = false, want true (queued, no free worker)")
+	if _, ok := ids["pending"]; !ok {
+		t.Error("PendingIDs missing \"pending\", want present (queued, no free worker)")
 	}
 	// "running" has been popped and is executing -> NOT pending. This is the
 	// pending-vs-running distinction the discriminator depends on.
-	if q.IsPending("running") {
-		t.Error("IsPending(running) = true, want false (already popped by a worker)")
+	if _, ok := ids["running"]; ok {
+		t.Error("PendingIDs contains \"running\", want absent (already popped by a worker)")
+	}
+	// Unknown id never appears.
+	if _, ok := ids["nope"]; ok {
+		t.Error("PendingIDs contains unknown id, want absent")
 	}
 
 	close(release)
 }
 
-// TestManagerIsJobPendingNilSafe guards Fix 2: Manager.IsJobPending must be
-// safe to call when the JobQueue is not wired (NewForTest builds a Manager
-// with a nil jobQueue). The qBit list handler calls it per entry; a nil-deref
-// there would panic the whole /torrents/info response.
-func TestManagerIsJobPendingNilSafe(t *testing.T) {
+// TestManagerPendingJobIDsNilSafe guards Fix 2: Manager.PendingJobIDs must be
+// safe when the JobQueue is not wired (NewForTest builds a Manager with a nil
+// jobQueue). The qBit list handler reads the returned map; a nil map must be
+// safe for comma-ok lookups so the handler needs no nil check.
+func TestManagerPendingJobIDsNilSafe(t *testing.T) {
 	m := &Manager{} // jobQueue nil, as in NewForTest
-	if m.IsJobPending("anything") {
-		t.Error("IsJobPending on nil jobQueue = true, want false")
+	ids := m.PendingJobIDs()
+	if ids != nil {
+		t.Errorf("PendingJobIDs on nil jobQueue = %v, want nil", ids)
+	}
+	if _, ok := ids["anything"]; ok {
+		t.Error("comma-ok lookup on nil map returned true, want false")
 	}
 }
