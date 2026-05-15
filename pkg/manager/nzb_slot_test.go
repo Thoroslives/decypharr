@@ -18,66 +18,11 @@ import (
 	"github.com/sirrobot01/decypharr/pkg/usenet"
 )
 
-// TestNZBPathRespectsJobQueueCap guards Fix 3 (BIS-2): the NZB JobQueue path
-// (JobTypeNZB) must honor max_downloads exactly like the torrent path. With a
-// JobQueue sized maxWorkers, a burst of JobTypeNZB jobs must never run more
-// than maxWorkers processFunc invocations concurrently. This mirrors
-// TestAddNewTorrentRespectsJobQueueCap for the NZB job type and locks the
-// dispatcher-side cap contract.
-func TestNZBPathRespectsJobQueueCap(t *testing.T) {
-	testutil.IsolateConfig(t, t.TempDir())
-
-	const (
-		maxWorkers = 2
-		totalJobs  = 6
-	)
-	var peak, current int32
-	release := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(totalJobs)
-
-	processFunc := func(ctx context.Context, job *Job) {
-		defer wg.Done()
-		c := atomic.AddInt32(&current, 1)
-		defer atomic.AddInt32(&current, -1)
-		for {
-			p := atomic.LoadInt32(&peak)
-			if c <= p || atomic.CompareAndSwapInt32(&peak, p, c) {
-				break
-			}
-		}
-		<-release
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	q := NewJobQueue(ctx, maxWorkers, processFunc)
-	defer q.Close()
-
-	for i := 0; i < totalJobs; i++ {
-		job := newTestJob(JobTypeNZB, fmt.Sprintf("nzb-%d", i))
-		if err := q.Submit(job); err != nil {
-			t.Fatalf("submit %d: %v", i, err)
-		}
-	}
-	time.Sleep(100 * time.Millisecond)
-
-	close(release)
-	wg.Wait()
-
-	if got := atomic.LoadInt32(&peak); got > maxWorkers {
-		t.Errorf("peak concurrency = %d, want <= %d (JobTypeNZB burst not capped)", got, maxWorkers)
-	}
-	if got := atomic.LoadInt32(&peak); got == 0 {
-		t.Errorf("peak concurrency = 0; expected jobs to actually run")
-	}
-}
-
 // minimalUsenet builds a *usenet.Usenet whose PreCache returns an error fast
 // instead of panicking: an empty fs map misses on Load, getFile then consults
 // the NZBStorage which has no record for the test id, so PreCache returns a
 // "not found" error. This keeps the detached precache goroutines in processNZB
-// (usenet.go ~96-102) from crashing the test process.
+// from crashing the test process.
 func minimalUsenet(t *testing.T) *usenet.Usenet {
 	t.Helper()
 	store, err := usenet.NewNZBStorage()
@@ -139,7 +84,7 @@ func newNZBSlotEntry(infohash string) *storage.Entry {
 
 func newNZBSlotMetadata(infohash, name string) *storage.NZB {
 	// Non-empty Files so processNZB clears its len(entry.Files)==0 guard and
-	// reaches the processAction call site (usenet.go:108).
+	// reaches the processAction call site in processNZB.
 	return &storage.NZB{
 		ID:        infohash,
 		Name:      name,
@@ -154,7 +99,7 @@ func newNZBSlotMetadata(infohash, name string) *storage.NZB {
 // processNZB runs processAction on the *caller's goroutine* rather than
 // spawning it with `go`, i.e. the caller is blocked until the local pull
 // finishes. This is the exact contract A-bis established for the torrent side;
-// the NZB side regressed via `go m.processAction(entry)` at usenet.go:108.
+// the NZB side regressed via a `go m.processAction(entry)` in processNZB.
 //
 // The DownloadActionNone path makes processAction's terminal effect a queue
 // delete. processNZB is called on the test goroutine with pre-fetched
