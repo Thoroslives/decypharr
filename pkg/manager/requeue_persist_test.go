@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/testutil"
 	"github.com/sirrobot01/decypharr/internal/utils"
@@ -247,6 +246,3 @@ func TestRequeueDiscardedWhenArrUnresolvable(t *testing.T) {
 	}
 	closeQueueStorage(t, strg)
 }
-
-// compile-time: ensure zerolog import stays used if helpers change.
-var _ = zerolog.Nop
