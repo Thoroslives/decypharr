@@ -135,6 +135,15 @@ func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) e
 		return fmt.Errorf("failed to add torrent to queue: %w", err)
 	}
 
+	// Success-path fast cleanup: a real storage.Entry now owns this grab, so
+	// any durable requeue record for it (written by a previous
+	// too_many_active_downloads -> ReQueue on the same hash) is obsolete.
+	// Best-effort only - DrainPersistedRequeue is self-healing, so a missed
+	// delete here is reclaimed on the next restart, never re-spawned.
+	if err := m.queue.DeletePersistedRequeue(torrent.InfoHash); err != nil {
+		m.logger.Warn().Err(err).Str("infohash", torrent.InfoHash).Msg("failed to delete persisted requeue record (will self-heal)")
+	}
+
 	// Route fresh-submission processing through the JobQueue so bursts
 	// (e.g. Radarr MissingMoviesSearch) honor max_downloads. Pre-fix this
 	// was an ungated `go m.processNewTorrent(...)` per submission.
