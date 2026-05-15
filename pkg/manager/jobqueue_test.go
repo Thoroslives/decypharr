@@ -28,8 +28,6 @@ func newTestJob(t JobType, id string) *Job {
 // must never run more than N processFunc invocations concurrently. The pre-Fix-A
 // bug was `go m.processQueuedTorrent(entry)` in processQueuedEntries firing per
 // queued item with zero concurrency cap, ignoring `max_downloads: N`.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix A).
 func TestJobQueueRespectsMaxWorkers(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 
@@ -132,8 +130,6 @@ func TestProcessJobRecoversPanics(t *testing.T) {
 // are now routed through the JobQueue via JobTypeNew, so a burst must not
 // exceed max_downloads concurrent workers. Pre-fix this path was an ungated
 // `go m.processNewTorrent(...)` per submission, bypassing Fix A's cap.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-soak-findings.md
 func TestAddNewTorrentRespectsJobQueueCap(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 

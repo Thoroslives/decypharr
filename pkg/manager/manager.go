@@ -33,8 +33,6 @@ import (
 // non-nil from RegisterDownload until CancelDownload / completion. The done
 // channel is closed exactly once when the registry entry is released; the
 // cancel func is idempotent.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 type downloadHandle struct {
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -112,7 +110,6 @@ type Manager struct {
 	// handle while a local download is in flight. Used by the qBit DELETE
 	// handler to cancel the worker before unlinking files, avoiding
 	// .fuse_hidden orphan inodes that leak GBs of data into the deleted FD.
-	// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 	downloadCancels *xsync.Map[string, *downloadHandle]
 
 	// Notifications service
@@ -646,8 +643,6 @@ func (m *Manager) DeleteTorrents(infohashes []string, removeFromDebrid bool) err
 // cancellation via CancelDownload. Returns the child ctx and a release func
 // that the caller MUST defer to clear the registry entry and close the done
 // channel. The release func is idempotent.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func (m *Manager) RegisterDownload(infohash string, parent context.Context) (context.Context, func()) {
 	ctx, cancel := context.WithCancel(parent)
 	h := &downloadHandle{cancel: cancel, done: make(chan struct{})}
@@ -668,8 +663,6 @@ func (m *Manager) RegisterDownload(infohash string, parent context.Context) (con
 
 // CancelDownload signals the per-torrent ctx for infohash. No-op if no
 // download is registered for that hash. Idempotent.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func (m *Manager) CancelDownload(infohash string) {
 	if h, ok := m.downloadCancels.Load(infohash); ok {
 		h.cancel()
@@ -715,8 +708,6 @@ func (m *Manager) CancelAndWait(infohash string, timeout time.Duration) error {
 // WaitForDownloadExit blocks until the registered download for infohash exits
 // or the timeout elapses. Returns nil on clean exit, context.DeadlineExceeded
 // on timeout, or nil if no download is registered (nothing to wait for).
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func (m *Manager) WaitForDownloadExit(infohash string, timeout time.Duration) error {
 	h, ok := m.downloadCancels.Load(infohash)
 	if !ok {

@@ -23,8 +23,6 @@ import (
 // reported to Radarr/Sonarr while nothing had touched local disk.
 //
 // Post-fix the same call site writes to RDProgress/RDSpeed via applyRDProgress.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func TestApplyRDProgressLeavesLocalFieldsUntouched(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -133,8 +131,6 @@ func TestApplyRDProgressUpdatesActiveProviderPlacement(t *testing.T) {
 // arithmetic that the literal must perform: the same `t.Progress / 100.0`
 // conversion applyRDProgress uses, applied identically to RDProgress and
 // to placement.Progress.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F).
 func TestProcessSyncTorrentRDProgressContract(t *testing.T) {
 	tests := []struct {
 		name           string

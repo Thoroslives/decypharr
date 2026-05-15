@@ -16,8 +16,6 @@ import (
 //
 // Per AllDebrid API: statusCode 0-3 = downloading variants,
 // 4 = downloaded/ready, 5+ = errors (deleted, virused, expired, etc).
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-plan.md (Fix G3)
 func TestGetAlldebridStatusHandlesUnknownStatus(t *testing.T) {
 	tests := []struct {
 		statusCode int

@@ -35,8 +35,6 @@ import (
 //
 // This test exercises steps 2-6 directly (skipping processAction's higher-
 // level flow because that would require a full Manager.init).
-//
-// See: /brain/02-Troubleshooting/2026-05-14-decypharr-shutdown-panic-flatline.md
 func TestDeleteMidDownloadCleansFD(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 

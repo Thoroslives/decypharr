@@ -15,8 +15,6 @@ import (
 //
 // The finished=true short-circuit returns Downloaded regardless of status
 // string; this is the authoritative completion signal from the TorBox API.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-plan.md (Fix G3)
 func TestGetTorboxStatusHandlesUnknownStatus(t *testing.T) {
 	tb := &Torbox{}
 	tests := []struct {

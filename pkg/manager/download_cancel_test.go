@@ -17,8 +17,6 @@ import (
 // Pre-fix the downloader uses Manager.ctx (process-wide context.Background())
 // for grab.Request, so qBit DELETE has no way to cancel a single in-flight
 // worker. The registry plus the localDownloader rewiring in B.2 fixes that.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func TestDownloadCancelRegisterCancelWait(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	m := &Manager{downloadCancels: xsync.NewMap[string, *downloadHandle]()}

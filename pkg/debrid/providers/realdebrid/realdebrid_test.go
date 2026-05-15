@@ -12,8 +12,6 @@ import (
 // helper must map any raw status it doesn't explicitly handle to
 // types.TorrentStatusError so the caller's default branch handles it
 // instead of looping forever.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-plan.md (Fix G3)
 func TestGetStatusHandlesUnknownStatus(t *testing.T) {
 	tests := []struct {
 		raw  string

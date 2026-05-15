@@ -41,8 +41,6 @@ const (
 // by downloader.go's progressCallback. The pre-Fix-F bug was conflating
 // these two semantic surfaces, which let RD's caching-side progress climb
 // to 100% while no local bytes had transferred.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func applyRDProgress(entry *storage.Entry, debridPercent float64, debridSpeed int64) {
 	entry.RDProgress = debridPercent / 100.0
 	entry.RDSpeed = debridSpeed
@@ -217,8 +215,6 @@ func (m *Manager) submitProcessingJob(entry *storage.Entry, jobType JobType) {
 // so a single bad job doesn't kill a worker permanently. JobQueue's own
 // workers have no recover() — without this wrapper, a panicked processFunc
 // would tear down the worker goroutine and shrink the pool.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix A).
 func (m *Manager) processJob(ctx context.Context, job *Job) {
 	defer func() {
 		if r := recover(); r != nil {

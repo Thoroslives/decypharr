@@ -28,8 +28,6 @@ import (
 // without reaching into private fields. Avoids the heavy New() flow which
 // hydrates debrid clients, the link service, the entry cache, and the
 // repair service.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func NewForTest(strg *storage.Storage, log zerolog.Logger) *Manager {
 	ctx := context.Background()
 	m := &Manager{

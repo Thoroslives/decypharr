@@ -46,8 +46,6 @@ func newDeleteRequest(t *testing.T, hashes []string) *http.Request {
 // We assert by registering a fake worker that records the time-of-cancel,
 // and recording the time at which the queue entry actually disappears.
 // Cancel-time must precede delete-time.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func TestHandleTorrentsDeleteCancelsBeforeUnlink(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	strg := mustOpenStorage(t, t.TempDir())

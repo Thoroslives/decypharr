@@ -14,8 +14,6 @@ import (
 // and therefore exhaustive — there's no fall-through hole. This test locks
 // the contract in so future refactors don't accidentally introduce a third
 // path that doesn't terminate.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-plan.md (Fix G3)
 func TestGetDebridLinkStatusBinaryMapping(t *testing.T) {
 	tests := []struct {
 		statusCode int
