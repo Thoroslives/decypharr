@@ -105,7 +105,13 @@ func (m *Manager) processNZB(ctx context.Context, entry *storage.Entry, metadata
 		return fmt.Errorf("nzb has no files")
 	}
 
-	go m.processAction(entry)
+	// Run the local pull synchronously so the calling worker holds its slot
+	// for the whole pull. processNZB is reached from the nzbWorker pool
+	// (processNewNzb) and from the JobQueue JobTypeNZB worker
+	// (processQueuedNZB); a `go` here returned the worker immediately and let
+	// the heavy pull run outside its slot, defeating the concurrency bound on
+	// both paths (the same class of escape A-bis fixed for torrents).
+	m.processAction(entry)
 	return nil
 }
 
