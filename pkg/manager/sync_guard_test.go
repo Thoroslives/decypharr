@@ -21,9 +21,6 @@ import (
 // This helper plus its caller in detectTorrentChanges adds belt-and-braces
 // using the Fix B downloadCancels registry as the source of truth for
 // "in-flight": if a hash is registered for active download, sync skips it.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix C).
-// See: /brain/01-Sessions/2026-05-15-decypharr-fork-design-brainstorm.md (C.0 spike).
 func TestShouldSkipSyncForInFlight(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	m := &Manager{downloadCancels: xsync.NewMap[string, *downloadHandle]()}

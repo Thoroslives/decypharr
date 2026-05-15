@@ -142,8 +142,6 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 // (ID + status + Files-non-empty match), but RD-side ID recycling, status
 // flap, or freshly-completed RD torrents whose local pull hasn't yet hit
 // processAction could still slip through. This helper closes those edges.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix C).
 func (m *Manager) shouldSkipSyncForInFlight(infohash string) bool {
 	_, active := m.downloadCancels.Load(infohash)
 	return active

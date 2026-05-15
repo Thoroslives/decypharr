@@ -22,8 +22,6 @@ import (
 //	State == EntryStateError               -> SizeDownloaded retained, no speed
 //	IsDownloading=true                     -> truthful local-pull counters
 //	otherwise (queued at RD, no worker)    -> zero across the board
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func TestGetTorrentPropertiesHonestProgress(t *testing.T) {
 	const size = int64(10_000_000_000) // 10 GB
 

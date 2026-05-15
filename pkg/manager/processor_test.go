@@ -24,8 +24,6 @@ func newTestManager(clk Clock) *Manager {
 // entries leak forever when worker goroutines panic without cleanup,
 // blocking future re-processing of the same hash. A periodic sweep removes
 // entries older than the configured TTL.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-plan.md (Task G6).
 func TestProcessingEntriesSweepRemovesExpired(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	clk := testutil.NewFakeClock(time.Now())

@@ -25,8 +25,6 @@ import (
 // cancelled mid-lifetime. Cancelling a per-torrent ctx had no effect on
 // the in-flight transfer, so DELETE unlinked while grab kept writing,
 // producing .fuse_hidden orphan inodes.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix B).
 func TestLocalDownloaderRespectsCtxCancel(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 

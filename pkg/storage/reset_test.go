@@ -12,9 +12,6 @@ import (
 // workers that died with the container) must be reset to false so
 // processQueuedEntries' filter (pkg/manager/processor.go:89:
 // "if entry.IsDownloading { continue }") doesn't skip them forever.
-//
-// See: /brain/02-Troubleshooting/2026-05-14-decypharr-shutdown-panic-flatline.md
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix D)
 func TestStorageResetsIsDownloadingOnNewStorage(t *testing.T) {
 	root := t.TempDir()
 	// NewStorage transitively calls logger.New -> config.Get(), which os.Exit(1)s
@@ -64,8 +61,6 @@ func TestStorageResetsIsDownloadingOnNewStorage(t *testing.T) {
 // in-flight downloads live in the queue bucket; the original Fix D only
 // reset the entries bucket. Same stuck-state class of bug as the one Fix D
 // was meant to address, just on the OTHER bucket.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-soak-findings.md
 func TestStorageResetsIsDownloadingInQueueBucket(t *testing.T) {
 	root := t.TempDir()
 	testutil.IsolateConfig(t, root)

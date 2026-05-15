@@ -24,11 +24,6 @@ import (
 // when a local-pull worker is actively running (IsDownloading=true); zero
 // otherwise. State is derived from lifecycle signals (IsComplete, State,
 // IsDownloading), not from the polluted Progress fraction.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised)
-// See: /brain/01-Sessions/2026-05-15-decypharr-fork-design-brainstorm.md
-//
-//	"Fix F Discovery Spike (F.0) — RESPEC verdict"
 func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 	const size = int64(10_000_000_000) // 10 GB
 

@@ -13,8 +13,6 @@ import (
 //     own ingestion claim (RD/AllDebrid/etc.). The fields are distinct so the
 //     qBit-compat API never sees the RD-side number, but the internal API can
 //     expose both for the Decypharr dashboard.
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func TestEntryRDProgressFieldsSerialize(t *testing.T) {
 	e := &Entry{
 		InfoHash:   "abc",

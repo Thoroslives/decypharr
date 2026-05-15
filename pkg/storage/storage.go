@@ -105,8 +105,6 @@ func NewStorage(dbPath string) (*Storage, error) {
 	// pkg/manager/processor.go:89 ("if entry.IsDownloading { continue }") skips
 	// the orphaned entries forever, requiring manual intervention after every
 	// restart.
-	//
-	// See: /brain/02-Troubleshooting/2026-05-14-decypharr-shutdown-panic-flatline.md
 	if err := s.ForEach(func(e *Entry) error {
 		if !e.IsDownloading {
 			return nil
@@ -126,8 +124,6 @@ func NewStorage(dbPath string) (*Storage, error) {
 	// downloads live here (not in the entries bucket); without this reset,
 	// processQueuedEntries' filter "if entry.IsDownloading { continue }"
 	// skips them forever post-restart.
-	//
-	// See: /brain/05-Projects/2026-05-15-decypharr-fork-soak-findings.md
 	if err := s.ForEachQueued(func(e *Entry) error {
 		if !e.IsDownloading {
 			return nil

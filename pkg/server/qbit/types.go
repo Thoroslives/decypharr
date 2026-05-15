@@ -443,8 +443,6 @@ const queuedDL storage.TorrentState = "queuedDL"
 //	IsDownloading=true                     -> downloading, truthful values
 //	no worker, held in JobQueue            -> queuedDL, zero progress/speed
 //	no worker, NOT held (RD-stuck)         -> stalledDL, zero progress/speed
-//
-// See: /brain/05-Projects/2026-05-15-decypharr-fork-spec.md (Fix F, revised).
 func convertToQBitTorrentTorrent(t *storage.Entry, held bool) Torrent {
 	// Sanitize first — internal API does this before serialization; qBit
 	// handler previously did not, leaving NaN/Inf Progress free to reach the
