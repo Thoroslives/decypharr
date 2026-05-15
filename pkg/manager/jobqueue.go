@@ -196,6 +196,21 @@ func (q *JobQueue) FindJob(jobID string) *Job {
 	return nil
 }
 
+// PendingIDs returns the set of job IDs currently waiting in the queue
+// (not yet popped by a worker). One lock acquisition; callers do O(1)
+// membership tests instead of locking per entry. pop() removes a job
+// from q.jobs before the worker runs it, so a job present here is by
+// definition pending, not in-flight.
+func (q *JobQueue) PendingIDs() map[string]struct{} {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	ids := make(map[string]struct{}, len(q.jobs))
+	for _, job := range q.jobs {
+		ids[job.ID] = struct{}{}
+	}
+	return ids
+}
+
 // PendingCount returns the count of pending jobs, optionally filtered by type
 func (q *JobQueue) PendingCount(jobType JobType) int {
 	q.mu.Lock()

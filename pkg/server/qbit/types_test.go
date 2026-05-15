@@ -133,7 +133,7 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			entry := tt.entry
-			got := convertToQBitTorrentTorrent(&entry)
+			got := convertToQBitTorrentTorrent(&entry, false)
 
 			if got.Progress != tt.wantProgress {
 				t.Errorf("Progress: got %v want %v", got.Progress, tt.wantProgress)
@@ -150,6 +150,112 @@ func TestConvertToQBitTorrentTorrentHonestProgress(t *testing.T) {
 			if got.AmountLeft != tt.wantAmountLeft {
 				t.Errorf("AmountLeft: got %d want %d", got.AmountLeft, tt.wantAmountLeft)
 			}
+			if got.State != tt.wantState {
+				t.Errorf("State: got %q want %q", got.State, tt.wantState)
+			}
+		})
+	}
+}
+
+// TestQBitState_HeldVsStalledVsActive guards Fix 2 (BIS-2).
+//
+// A submission waiting for a free JobQueue worker slot (over max_downloads)
+// was reported as stalledDL, so Radarr badged it "stalled" and aggressive
+// stalled-handling could remove and blocklist it. It must instead be reported
+// as queuedDL so Radarr treats it as queued (no stalled-removal churn).
+//
+// The discriminator is JobQueue membership (the entry's job is still pending
+// in the in-memory JobQueue, not yet picked up by a worker), threaded into
+// the conversion via the `held` parameter. After Fix 1 a held entry also
+// carries ActiveProvider, IsDownloading=false and Progress=0, which is
+// indistinguishable by entry fields alone from a torrent genuinely stuck on
+// a slow or dead RD-side download. Mapping the RD-stuck case to queuedDL
+// would make Radarr never time out a dead grab (a silent permanent stall,
+// strictly worse than today). So when held=false the default state MUST
+// remain stalledDL; only a genuinely JobQueue-pending entry (held=true) is
+// upgraded to queuedDL. The "genuine RD-stuck" row asserts that explicitly.
+func TestQBitState_HeldVsStalledVsActive(t *testing.T) {
+	const size = int64(10_000_000_000)
+
+	tests := []struct {
+		name      string
+		entry     storage.Entry
+		held      bool
+		wantState storage.TorrentState
+	}{
+		{
+			// Job still pending in the JobQueue, no worker yet. Post-Fix-1 the
+			// entry carries ActiveProvider but has no local-pull progress.
+			name: "held in JobQueue (pending job present)",
+			entry: storage.Entry{
+				Size:           size,
+				ActiveProvider: "realdebrid",
+				IsDownloading:  false,
+				IsComplete:     false,
+			},
+			held:      true,
+			wantState: queuedDL,
+		},
+		{
+			// Active local-pull worker. IsDownloading wins regardless of held.
+			name: "active worker, IsDownloading",
+			entry: storage.Entry{
+				Size:           size,
+				ActiveProvider: "realdebrid",
+				Progress:       0.5,
+				Speed:          100_000,
+				SizeDownloaded: 5_000_000_000,
+				IsDownloading:  true,
+				State:          storage.EntryStateDownloading,
+			},
+			held:      true,
+			wantState: storage.EntryStateDownloading,
+		},
+		{
+			// THE ANTI-REGRESSION ROW. Not in the JobQueue (held=false), no
+			// worker, no local progress: a genuine RD-stuck grab. This MUST
+			// stay stalledDL so Radarr can still time the dead grab out.
+			// Indistinguishable from the held case by entry fields alone,
+			// which is exactly why a pure entry-field heuristic is rejected.
+			name: "genuine RD-stuck (not in JobQueue) stays stalledDL",
+			entry: storage.Entry{
+				Size:           size,
+				ActiveProvider: "realdebrid",
+				IsDownloading:  false,
+				IsComplete:     false,
+			},
+			held:      false,
+			wantState: stalledDL,
+		},
+		{
+			// held must never override a terminal/paused state.
+			name: "completed stays pausedUP even if held flag set",
+			entry: storage.Entry{
+				Size:       size,
+				Progress:   1.0,
+				IsComplete: true,
+				State:      storage.EntryStatePausedUP,
+			},
+			held:      true,
+			wantState: storage.EntryStatePausedUP,
+		},
+		{
+			name: "error stays error even if held flag set",
+			entry: storage.Entry{
+				Size:           size,
+				SizeDownloaded: 1_000_000_000,
+				IsDownloading:  false,
+				State:          storage.EntryStateError,
+			},
+			held:      true,
+			wantState: storage.EntryStateError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entry := tt.entry
+			got := convertToQBitTorrentTorrent(&entry, tt.held)
 			if got.State != tt.wantState {
 				t.Errorf("State: got %q want %q", got.State, tt.wantState)
 			}

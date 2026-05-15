@@ -676,6 +676,24 @@ func (m *Manager) CancelDownload(infohash string) {
 	}
 }
 
+// PendingJobIDs returns the set of entry infohashes whose JobQueue job is
+// still waiting for a worker (not yet picked up). Job IDs for new and
+// reprocessing torrent/NZB jobs are the entry InfoHash (see AddNewTorrent
+// and submitProcessingJob), so the qBit list handler uses this to tell a
+// genuinely JobQueue-held submission (report queuedDL) from a torrent stuck
+// on the debrid side with no pending job (report stalledDL so Radarr can
+// still time it out).
+//
+// Nil-safe: returns a nil map when the JobQueue is not wired (e.g. test
+// Managers built via NewForTest). A nil map is safe for comma-ok reads, so
+// callers need no nil check.
+func (m *Manager) PendingJobIDs() map[string]struct{} {
+	if m.jobQueue == nil {
+		return nil
+	}
+	return m.jobQueue.PendingIDs()
+}
+
 // WaitForDownloadExit blocks until the registered download for infohash exits
 // or the timeout elapses. Returns nil on clean exit, context.DeadlineExceeded
 // on timeout, or nil if no download is registered (nothing to wait for).
