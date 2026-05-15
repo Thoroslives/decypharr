@@ -31,7 +31,7 @@ func mustOpenStorage(t *testing.T, dir string) *storage.Storage {
 // newServerForTest builds a *Server with only the fields the internal DELETE
 // handlers touch (manager + logger). The full New() flow parses templates from
 // an embedded FS, builds a cookie store, and constructs the qbit/sabnzbd/webdav
-// sub-handlers — none of which handleDeleteTorrent / handleDeleteTorrents need.
+// sub-handlers, none of which handleDeleteTorrent / handleDeleteTorrents need.
 // The test is in package server, so the unexported fields are accessible. This
 // keeps the test a tight handler unit test, mirroring the qBit test's use of a
 // minimal NewForTest manager.
@@ -115,11 +115,11 @@ func TestHandleDeleteTorrentCancelsBeforeUnlink(t *testing.T) {
 	select {
 	case <-workerExited:
 	case <-time.After(time.Second):
-		t.Fatal("worker did not observe ctx cancellation — handler did not call CancelDownload")
+		t.Fatal("worker did not observe ctx cancellation; handler did not call CancelDownload")
 	}
 
 	if cancelTimeUnixNano.Load() == 0 {
-		t.Fatal("worker exited without recording cancel time — order assertion impossible")
+		t.Fatal("worker exited without recording cancel time; order assertion impossible")
 	}
 
 	// Capture delete-time AFTER the handler returns. Queue.Delete is
@@ -128,12 +128,12 @@ func TestHandleDeleteTorrentCancelsBeforeUnlink(t *testing.T) {
 
 	// Sanity-check the queue row is gone.
 	if _, err := strg.GetQueued(hash); err == nil {
-		t.Error("queue entry still present after DELETE handler — Queue.Delete was not invoked")
+		t.Error("queue entry still present after DELETE handler; Queue.Delete was not invoked")
 	}
 
 	// Order check: cancel time must be <= delete-observation time.
 	if cancelTimeUnixNano.Load() > deleteObservedNano {
-		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d) — Fix B-bis ordering regression",
+		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d); Fix B-bis ordering regression",
 			cancelTimeUnixNano.Load(), deleteObservedNano)
 	}
 
@@ -191,21 +191,21 @@ func TestHandleDeleteTorrentsBatchCancelsBeforeUnlink(t *testing.T) {
 	select {
 	case <-workerExited:
 	case <-time.After(time.Second):
-		t.Fatal("worker did not observe ctx cancellation — batch handler did not call CancelDownload")
+		t.Fatal("worker did not observe ctx cancellation; batch handler did not call CancelDownload")
 	}
 
 	if cancelTimeUnixNano.Load() == 0 {
-		t.Fatal("worker exited without recording cancel time — order assertion impossible")
+		t.Fatal("worker exited without recording cancel time; order assertion impossible")
 	}
 
 	deleteObservedNano := time.Now().UnixNano()
 
 	if _, err := strg.GetQueued(hash); err == nil {
-		t.Error("queue entry still present after batch DELETE handler — Queue.DeleteWhere was not invoked")
+		t.Error("queue entry still present after batch DELETE handler; Queue.DeleteWhere was not invoked")
 	}
 
 	if cancelTimeUnixNano.Load() > deleteObservedNano {
-		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d) — Fix B-bis ordering regression",
+		t.Errorf("cancel happened AFTER delete (cancel=%d delete=%d); Fix B-bis ordering regression",
 			cancelTimeUnixNano.Load(), deleteObservedNano)
 	}
 
