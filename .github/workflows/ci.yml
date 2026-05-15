@@ -32,15 +32,12 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      # Pre-existing v2.3 test failures (NOT regressions from our fixes):
-      # - TestGetMagnetFrom*: magnet.go transitively pulls logger->config.Get() which
-      #   os.Exit(1)s when GetMainPath() is unset (production main() sets it via
-      #   SetConfigPath; tests don't).
+      # Pre-existing v2.3 test failure (NOT a regression from our fixes):
       # - TestSegmentCacheDiskEviction: disk eviction logic doesn't fire in CI env
       #   despite MaxDisk: 2000 with 5x1000-byte segments.
-      # Track these for separate upstream fix.
+      # Track this for separate upstream fix.
       - name: go test
-        run: go test ./... -race -timeout 10m -skip '^(TestGetMagnetFrom|TestSegmentCacheDiskEviction)'
+        run: go test ./... -race -timeout 10m -skip '^TestSegmentCacheDiskEviction'
 
   build:
     needs: [test]
