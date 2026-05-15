@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	json "github.com/bytedance/sonic"
 
@@ -22,13 +21,6 @@ import (
 	"github.com/sourcegraph/conc/iter"
 	"golang.org/x/crypto/bcrypt"
 )
-
-// deleteWorkerWaitTimeout caps how long an internal-API DELETE handler
-// blocks waiting for an in-flight local-pull worker to exit before
-// unlinking. Mirrors the qBit-compat handler's gate (Fix B). It is a
-// separate const because qbit's deleteWorkerWaitTimeout is package-private
-// to qbit and not reachable from package server.
-const deleteWorkerWaitTimeout = 5 * time.Second
 
 func (s *Server) handleGetArrs(w http.ResponseWriter, r *http.Request) {
 	utils.JSONResponse(w, s.manager.Arr().GetAll(), http.StatusOK)
@@ -372,8 +364,7 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	// worker writing to a deleted FD, producing .fuse_hidden orphans and
 	// "directory not empty" errors. CancelDownload is a no-op for hashes
 	// with no registered worker, so this is safe unconditionally.
-	s.manager.CancelDownload(hash)
-	if err := s.manager.WaitForDownloadExit(hash, deleteWorkerWaitTimeout); err != nil {
+	if err := s.manager.CancelAndWait(hash, manager.DeleteWorkerWaitTimeout); err != nil {
 		s.logger.Warn().Err(err).Str("infohash", hash).Msg("download worker did not exit within timeout; unlinking anyway")
 	}
 
@@ -412,8 +403,7 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	// Fix B-bis: same Cancel+Wait gate as handleDeleteTorrent, applied to
 	// every hash before the batch unlink.
 	for _, hash := range hashes {
-		s.manager.CancelDownload(hash)
-		if err := s.manager.WaitForDownloadExit(hash, deleteWorkerWaitTimeout); err != nil {
+		if err := s.manager.CancelAndWait(hash, manager.DeleteWorkerWaitTimeout); err != nil {
 			s.logger.Warn().Err(err).Str("infohash", hash).Msg("download worker did not exit within timeout; unlinking anyway")
 		}
 	}
