@@ -67,6 +67,9 @@ func (c *Config) applyEnvOverrides() {
 	if val := getEnv("REMOVE_STALLED_AFTER"); val != "" {
 		c.RemoveStalledAfter = val
 	}
+	if val := getEnv("ACCOUNT_REPROBE_COOLDOWN"); val != "" {
+		c.AccountReprobeCooldown = val
+	}
 	if val := getEnv("ENABLE_WEBDAV_AUTH"); val != "" {
 		c.EnableWebdavAuth = parseBool(val)
 	}

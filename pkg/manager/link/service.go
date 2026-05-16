@@ -98,6 +98,23 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 	if err := ctx.Err(); err != nil {
 		return emptyDownloadLink, err
 	}
+
+	// Pre-debrid short-circuit for the account-disable latch. If the active
+	// provider has NO usable account (every account disabled and none past
+	// its re-probe cooldown), making the debrid round-trip would just
+	// re-cap, re-enter disableLinkAccount and re-disable every
+	// refresh_interval (~15s) - the latch (slower, still restart-only).
+	// Fail fast with a transient account error WITHOUT the round-trip and
+	// WITHOUT touching Disable/MarkDisabled, so the cooldown timestamp is
+	// left to actually elapse. The error is CategoryAccountIssue (transient,
+	// never markEntryBad) so the entry stays retryable; once the cooldown
+	// elapses HasUsableAccount returns true and the next attempt re-probes.
+	if client, cerr := s.getClient(entry.ActiveProvider); cerr == nil {
+		if am := client.AccountManager(); am != nil && !am.HasUsableAccount() {
+			return emptyDownloadLink, NewAccountError(ErrNoActiveAccount, "account_cooldown_active")
+		}
+	}
+
 	link, err := s.fetchLink(ctx, entry, filename, attempt)
 	if err != nil {
 		return s.handleBadLink(ctx, err, entry, link, attempt)
@@ -126,17 +143,30 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 		// Handle link error categories
 		if linkErr := GetLinkError(validationErr); linkErr != nil {
 			if linkErr.ShouldDisableAccount() {
-				if err := s.disableLinkAccount(link, linkErr); err != nil {
+				swapped, err := s.disableLinkAccount(link, linkErr)
+				if err != nil {
 					s.logger.Error().
 						Err(err).
 						Str("debrid", link.Debrid).
 						Str("token", utils.Mask(link.Token)).
 						Str("reason", linkErr.Code).
 						Msg("Failed to disable account after link error")
-				} else {
-					// This will use the next available account and fetch a new link, so we need to refetch and revalidate.
-					// Account swap doesn't consume a re-insertion attempt.
+				} else if swapped {
+					// A genuinely-active account distinct from the one just
+					// disabled exists: retry on it. This recurse-once swap
+					// does not consume a re-insertion attempt.
 					return s.fetchAndValidate(ctx, entry, filename, attempt)
+				} else {
+					// Degenerate case: no active account to swap to (single
+					// account, or all others already disabled). Recursing
+					// here is the account-disable latch (unbounded tight loop
+					// until a process restart). Fail fast with the transient
+					// account error WITHOUT recursing and WITHOUT any path
+					// that reaches markEntryBad, so the entry stays retryable
+					// and the account-package cooldown can re-probe it on a
+					// later GetLink (RD's limit window resets -> next attempt
+					// succeeds; still capped -> a cheap re-disable).
+					return emptyDownloadLink, validationErr
 				}
 			} else if linkErr.ShouldRefetch() {
 				// Invalidate and refetch
@@ -149,6 +179,16 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 	s.validated.Store(link.DownloadLink, validationErr)
 
 	if validationErr == nil {
+		// The link validated: the debrid demonstrably served this account.
+		// If that account was Disabled (a post-cooldown re-probe that
+		// succeeded because the debrid's limit window reset), implicitly
+		// re-enable it so it rejoins Active() and returns to normal instead
+		// of staying flagged forever as a tier-2 cooled re-probe candidate.
+		if client, cerr := s.getClient(link.Debrid); cerr == nil {
+			if am := client.AccountManager(); am != nil {
+				am.EnableAccount(link.Token)
+			}
+		}
 		return link, nil
 	}
 	return emptyDownloadLink, validationErr
@@ -381,26 +421,38 @@ func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) er
 	return ErrorCodeToLinkError(errorCode)
 }
 
-// disableLinkAccount handles errors that require disabling an account
-func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) error {
+// disableLinkAccount handles errors that require disabling an account.
+//
+// It returns swapped=true only when, after disabling the offending account,
+// a genuinely-active account DISTINCT from the one just disabled is
+// available to retry on. swapped=false is the degenerate case (single
+// account, or every other account already disabled): the "swap" would be a
+// no-op, so the caller must NOT recurse - recursing there is the
+// account-disable latch (an unbounded tight loop that only a process restart
+// breaks). The cooldown-based re-probe (account package) is what eventually
+// self-heals a degenerate single-account cap.
+func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) (swapped bool, err error) {
 	client, err := s.getClient(link.Debrid)
 	if err != nil {
-		return fmt.Errorf("failed to get client for debrid %s: %w", link.Debrid, err)
+		return false, fmt.Errorf("failed to get client for debrid %s: %w", link.Debrid, err)
 	}
 
 	accountManager := client.AccountManager()
 	account, err := accountManager.GetAccount(link.Token)
 	if err != nil {
-		return fmt.Errorf("failed to get account for token %s: %w", utils.Mask(link.Token), err)
+		return false, fmt.Errorf("failed to get account for token %s: %w", utils.Mask(link.Token), err)
 	}
 
 	if account == nil {
-		return fmt.Errorf("account not found for token %s", utils.Mask(link.Token))
+		return false, fmt.Errorf("account not found for token %s", utils.Mask(link.Token))
 	}
 
 	accountManager.Disable(account)
 
-	// Remove all validations for all the links
+	// Remove all validations for all the links. This is a GLOBAL wipe; it is
+	// acceptable because a fully-capped single account stalls the whole
+	// pipeline anyway, and Manager's active-first selection keeps re-disables
+	// (and thus this wipe) rare under multi-account partial caps.
 	s.validated.Clear()
 	s.logger.Warn().
 		Str("debrid", link.Debrid).
@@ -408,7 +460,17 @@ func (s *Service) disableLinkAccount(link types.DownloadLink, linkErr *Error) er
 		Str("account", utils.Mask(account.Username)).
 		Str("reason", linkErr.Code).
 		Msg("Disabled account due to error")
-	return nil
+
+	// Is there a genuinely-active account other than the one just disabled?
+	// Only then is a refetch-on-swap legitimate. Active() never includes the
+	// just-disabled account (Disabled is now set), so any element here is a
+	// real distinct swap target.
+	for _, acc := range accountManager.Active() {
+		if acc != nil && acc.Token != account.Token {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // invalidateAndRefetch removes a link from both validation tracking and account cache

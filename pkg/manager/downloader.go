@@ -527,8 +527,16 @@ func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.
 		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink})
 	}
 
-	// If no valid download links were obtained, return error instead of panic
+	// No valid links. download() persisted IsDownloading=true and the
+	// processAction caller returns this error without markAsError, so
+	// nothing clears it -> processQueuedEntries skips the entry forever
+	// (until a restart). Reset it, keeping State=EntryStateDownloading (NOT
+	// Error/Bad: a transient account cap must stay retryable) so the next
+	// tick re-dispatches and the account cooldown can give it a real retry.
 	if len(tasks) == 0 {
+		entry.IsDownloading = false
+		entry.UpdatedAt = time.Now()
+		_ = d.manager.queue.Update(entry)
 		return fmt.Errorf("no valid download links available for %s", entry.Name)
 	}
 
