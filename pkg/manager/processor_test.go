@@ -10,11 +10,13 @@ import (
 )
 
 // newTestManager builds the minimal Manager surface that
-// sweepProcessingEntries needs (clock, processingEntries map, logger).
-// Avoids manager.New() which would pull config + storage + debrid clients.
+// sweepProcessingEntries needs: clock, processingEntries map, logger, and
+// the downloadCancels in-flight registry the sweep/dispatch gates consult
+// (B5). Avoids manager.New() which would pull config + storage + debrid.
 func newTestManager(clk Clock) *Manager {
 	return &Manager{
 		processingEntries: xsync.NewMap[string, time.Time](),
+		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
 		clock:             clk,
 		logger:            zerolog.Nop(),
 	}

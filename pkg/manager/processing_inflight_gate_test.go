@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/puzpuzpuz/xsync/v4"
 	"github.com/rs/zerolog"
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/testutil"
@@ -64,12 +63,7 @@ func recordingJobQueue(t *testing.T) (*JobQueue, func() []string) {
 func TestSweepKeepsInFlightEntry(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	clk := testutil.NewFakeClock(time.Now())
-	m := &Manager{
-		processingEntries: xsync.NewMap[string, time.Time](),
-		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
-		clock:             clk,
-		logger:            zerolog.Nop(),
-	}
+	m := newTestManager(clk)
 
 	const hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -98,12 +92,7 @@ func TestSweepKeepsInFlightEntry(t *testing.T) {
 func TestSweepReclaimsLeakedEntryWithoutInFlight(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	clk := testutil.NewFakeClock(time.Now())
-	m := &Manager{
-		processingEntries: xsync.NewMap[string, time.Time](),
-		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
-		clock:             clk,
-		logger:            zerolog.Nop(),
-	}
+	m := newTestManager(clk)
 
 	const hash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	m.processingEntries.Store(hash, clk.Now())
@@ -124,12 +113,7 @@ func TestSweepReclaimsLeakedEntryWithoutInFlight(t *testing.T) {
 func TestSweepAbsoluteCeilingReclaimsEvenInFlight(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 	clk := testutil.NewFakeClock(time.Now())
-	m := &Manager{
-		processingEntries: xsync.NewMap[string, time.Time](),
-		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
-		clock:             clk,
-		logger:            zerolog.Nop(),
-	}
+	m := newTestManager(clk)
 
 	const hash = "cccccccccccccccccccccccccccccccccccccccc"
 	_, release := m.RegisterDownload(hash, context.Background())
@@ -174,7 +158,7 @@ func TestProcessActionDoesNotOverwriteLiveRegistration(t *testing.T) {
 
 	const hash = "dddddddddddddddddddddddddddddddddddddddd"
 	entry := newAddNewTorrentStyleEntry(hash, "Some.Like.It.Hot.1959.2160p", 1)
-	entry.Action = "symlink"
+	entry.Action = config.DownloadActionSymlink
 
 	// First/legitimate worker registers the download and is still running.
 	_, release := m.RegisterDownload(hash, context.Background())
@@ -191,10 +175,18 @@ func TestProcessActionDoesNotOverwriteLiveRegistration(t *testing.T) {
 	// release() deletes the (now-overwritten) registration. Recover so the
 	// invariant below is asserted instead of the binary dying; reaching the
 	// downloader at all already means the gate failed.
+	panicked := false
 	func() {
-		defer func() { _ = recover() }()
+		defer func() {
+			if recover() != nil {
+				panicked = true
+			}
+		}()
 		m.processAction(entry)
 	}()
+	if panicked {
+		t.Fatal("processAction ran past the in-flight gate (panicked on the intentionally-nil downloader); the chokepoint did not bail before RegisterDownload")
+	}
 
 	got, ok := m.downloadCancels.Load(hash)
 	if !ok {
@@ -247,10 +239,29 @@ func TestProcessQueuedEntriesSkipsInFlight(t *testing.T) {
 
 	m.processQueuedEntries()
 
-	// Give the (correctly: none) dispatched job a chance to be recorded.
-	time.Sleep(100 * time.Millisecond)
-
-	if got := dispatched(); len(got) != 0 {
+	// Deterministic barrier (no timing assumption, no -race false-pass): the
+	// recording JobQueue has a single FIFO worker, so a sentinel submitted
+	// AFTER processQueuedEntries is dispatched strictly after anything the
+	// gate wrongly submitted. Once the sentinel is observed, any wrongful
+	// dispatch is already recorded.
+	const sentinel = "ffffffffffffffffffffffffffffffffffffffff"
+	if err := jq.Submit(&Job{ID: sentinel, Type: JobTypeTorrent}); err != nil {
+		t.Fatalf("submit sentinel: %v", err)
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		got := dispatched()
+		if len(got) > 0 && got[len(got)-1] == sentinel {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("sentinel not observed within 10s (dispatched=%v)", got)
+		default:
+			time.Sleep(2 * time.Millisecond)
+		}
+	}
+	if got := dispatched(); len(got) != 1 || got[0] != sentinel {
 		t.Fatalf("processQueuedEntries re-submitted an in-flight hash to the JobQueue: %v; a second concurrent writer would run", got)
 	}
 	if _, held := m.processingEntries.Load(hash); held {

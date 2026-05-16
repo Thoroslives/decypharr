@@ -79,18 +79,12 @@ func (m *Manager) absoluteCeiling() time.Duration {
 // number of entries reclaimed.
 //
 // A slot is reclaimed only when it is past maxAge AND no local pull is
-// registered for it (hasInFlightDownload). The sweep's purpose is to
-// reclaim slots leaked by workers that died/exited without their
-// `defer Delete()`; a live downloadCancels registration means the worker
-// is NOT dead, so reclaiming mid-flight would re-dispatch a second
-// concurrent writer on the same inode (B5). The absolute-ceiling backstop
-// reclaims regardless of in-flight state once a slot is implausibly old,
-// so a future downloadCancels leak cannot convert this self-healing bug
-// into a silent, permanently-wedged one (a noisy reclaim beats a silent
-// unrecoverable block).
-//
-// NZB is out of scope by construction: hasInFlightDownload is torrent-only
-// (downloadCancels is populated only on the torrent post-download path).
+// registered for it (hasInFlightDownload): the sweep exists to reclaim
+// slots leaked by workers that died without their `defer Delete()`, and a
+// live downloadCancels registration means the worker is NOT dead, so
+// reclaiming mid-flight would re-dispatch a second concurrent writer on the
+// same inode (B5). Past absoluteCeiling the slot is reclaimed regardless of
+// in-flight state (backstop — see processingEntriesAbsoluteCeiling).
 func (m *Manager) sweepProcessingEntries(maxAge time.Duration) int {
 	now := m.clock.Now()
 	cutoff := now.Add(-maxAge)
@@ -223,14 +217,11 @@ func (m *Manager) processQueuedEntries() {
 		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, m.clock.Now()); loaded {
 			continue
 		}
-		// Cheap early-out for the B5 dup-dispatch class: a live local pull is
-		// already registered for this hash (e.g. its dedup slot was reclaimed
-		// mid-flight by an older sweep, or this is a re-grab of an in-flight
-		// hash). Re-submitting would put a second concurrent writer on the
-		// same inode. Release the slot we just took so a legitimate future
-		// re-process is not blocked, mirroring the failure-path Deletes below.
-		// The processAction chokepoint is the authoritative guard; this is
-		// only an early-out. NZB is unaffected (torrent-only predicate).
+		// B5 early-out: a live local pull is already registered for this
+		// hash; re-submitting would put a second concurrent writer on the
+		// same inode. Release the slot just taken so a legitimate future
+		// re-process is not blocked. processAction is the authoritative
+		// guard; this is only a cheap early-out.
 		if m.hasInFlightDownload(entry.InfoHash) {
 			m.processingEntries.Delete(entry.InfoHash)
 			continue
@@ -443,18 +434,12 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 }
 
 func (m *Manager) processAction(entry *storage.Entry) {
-	// Central chokepoint for the B5 dup-writer class. RegisterDownload below
-	// does downloadCancels.Store, which OVERWRITES any existing handle for
-	// this infohash. If a live registration already exists, a different
-	// goroutine is mid-pull on this hash (the processQueuedEntries
-	// TTL-reclaim re-dispatch, or an AddNewTorrent->JobTypeNew->
-	// processNewTorrent re-grab of an in-flight hash). Proceeding would
-	// overwrite the original worker's cancel/done wiring (a DELETE could no
-	// longer cancel the real worker) and start a second concurrent writer on
-	// the same inode. Bail this duplicate before any state mutation. The
-	// first/legitimate processAction has no live handle yet, so it proceeds
-	// normally and is the one that calls RegisterDownload. NZB is out of
-	// scope by construction (hasInFlightDownload is torrent-only).
+	// Central chokepoint for the B5 dup-writer class: RegisterDownload below
+	// does downloadCancels.Store, which OVERWRITES any existing handle. If a
+	// live registration already exists a different goroutine is mid-pull on
+	// this hash; proceeding would orphan the original worker's cancel/done
+	// wiring (a DELETE could no longer cancel it) and start a second
+	// concurrent writer on the same inode. Bail before any state mutation.
 	if m.hasInFlightDownload(entry.InfoHash) {
 		m.logger.Info().
 			Str("name", entry.Name).
