@@ -18,10 +18,18 @@ import (
 
 // HealthStatus represents the status of various components
 type HealthStatus struct {
-	QbitAPI       bool `json:"qbit_api"`
-	WebUI         bool `json:"web_ui"`
-	WebDAVService bool `json:"webdav_service"`
-	OverallStatus bool `json:"overall_status"`
+	QbitAPI        bool `json:"qbit_api"`
+	WebUI          bool `json:"web_ui"`
+	WebDAVService  bool `json:"webdav_service"`
+	WebDAVDisabled bool `json:"webdav_disabled,omitempty"`
+	OverallStatus  bool `json:"overall_status"`
+}
+
+// overallStatus reports whether the container is healthy. WebDAV is
+// not-applicable when disabled in config (sequential mode): a
+// deliberately-off service must not fail the healthcheck.
+func overallStatus(s HealthStatus, disableWebDav bool) bool {
+	return s.QbitAPI && s.WebUI && (disableWebDav || s.WebDAVService)
 }
 
 func main() {
@@ -39,10 +47,11 @@ func main() {
 
 	// Initialize status
 	status := HealthStatus{
-		QbitAPI:       false,
-		WebUI:         false,
-		WebDAVService: false,
-		OverallStatus: false,
+		QbitAPI:        false,
+		WebUI:          false,
+		WebDAVService:  false,
+		WebDAVDisabled: cfg.DisableWebDav,
+		OverallStatus:  false,
 	}
 
 	// Create a context with timeout for all HTTP requests
@@ -59,10 +68,16 @@ func main() {
 
 	status.QbitAPI = checkQbitAPI(ctx, client, baseUrl, port, auth, cfg.UseAuth)
 	status.WebUI = checkWebUI(ctx, client, baseUrl, port, auth, cfg.UseAuth)
-	status.WebDAVService = checkBaseWebdav(ctx, client, baseUrl, port, cfg)
+	// Skip the webdav probe when webdav is disabled in config: the route
+	// is not served, so the PROPFIND would always fail. This is a pure
+	// optimization; correctness comes from the overallStatus gate below.
+	// WebDAVService stays false when skipped (genuinely not running).
+	if !cfg.DisableWebDav {
+		status.WebDAVService = checkBaseWebdav(ctx, client, baseUrl, port, cfg)
+	}
 	// Determine overall status
 	// Consider the application healthy if core services are running
-	status.OverallStatus = status.QbitAPI && status.WebUI && status.WebDAVService
+	status.OverallStatus = overallStatus(status, cfg.DisableWebDav)
 
 	// Optional: output health status as JSON for logging
 	if debug {
