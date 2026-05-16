@@ -21,7 +21,7 @@ type HealthStatus struct {
 	QbitAPI        bool `json:"qbit_api"`
 	WebUI          bool `json:"web_ui"`
 	WebDAVService  bool `json:"webdav_service"`
-	WebDAVDisabled bool `json:"webdav_disabled,omitempty"`
+	WebDAVDisabled bool `json:"webdav_disabled,omitempty"` // debug-JSON clarity only; overallStatus takes the policy via its param, never reads this field
 	OverallStatus  bool `json:"overall_status"`
 }
 
@@ -71,7 +71,6 @@ func main() {
 	// Skip the webdav probe when webdav is disabled in config: the route
 	// is not served, so the PROPFIND would always fail. This is a pure
 	// optimization; correctness comes from the overallStatus gate below.
-	// WebDAVService stays false when skipped (genuinely not running).
 	if !cfg.DisableWebDav {
 		status.WebDAVService = checkBaseWebdav(ctx, client, baseUrl, port, cfg)
 	}

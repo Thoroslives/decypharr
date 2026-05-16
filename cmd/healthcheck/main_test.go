@@ -40,6 +40,14 @@ func TestOverallStatus(t *testing.T) {
 			want:          false,
 		},
 		{
+			name:          "qbit down is unhealthy with webdav enabled",
+			qbitAPI:       false,
+			webUI:         true,
+			webDAVService: true,
+			disableWebDav: false,
+			want:          false,
+		},
+		{
 			name:          "qbit down is unhealthy even with webdav disabled",
 			qbitAPI:       false,
 			webUI:         true,
