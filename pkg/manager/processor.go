@@ -26,6 +26,16 @@ import (
 const (
 	processingEntriesTTL        = 5 * time.Minute
 	processingEntriesSweepEvery = 1 * time.Minute
+
+	// processingEntriesAbsoluteCeiling is a hard upper bound on how long a
+	// processingEntries slot may survive the in-flight gate. The gate
+	// (hasInFlightDownload) deliberately refuses to reclaim a slot while a
+	// download is registered, which is correct for a legit long pull but
+	// would silently wedge re-processing forever if a downloadCancels entry
+	// ever leaked. Past this ceiling the sweep reclaims regardless of
+	// in-flight state: a noisy self-healing reclaim is preferable to a
+	// silent unrecoverable block. Set far above any plausible legit pull.
+	processingEntriesAbsoluteCeiling = 12 * time.Hour
 )
 
 // applyRDProgress writes an RD-side (upstream debrid) ingestion claim onto
@@ -49,14 +59,40 @@ func applyRDProgress(entry *storage.Entry, debridPercent float64, debridSpeed in
 	}
 }
 
+// absoluteCeiling is the hard upper bound past which a processingEntries
+// slot is reclaimed even while a download is registered (B5 backstop). It
+// is a multiple of remove_stalled_after when configured (a stalled-removal
+// window already bounds how long any single grab is allowed to live), and
+// falls back to processingEntriesAbsoluteCeiling otherwise. The multiple
+// keeps the ceiling comfortably above a legit long pull while still finite.
+func (m *Manager) absoluteCeiling() time.Duration {
+	if m.queue != nil && m.queue.removeStalledAfter > 0 {
+		if c := 4 * m.queue.removeStalledAfter; c > processingEntriesAbsoluteCeiling {
+			return c
+		}
+	}
+	return processingEntriesAbsoluteCeiling
+}
+
 // sweepProcessingEntries removes entries from processingEntries whose
 // timestamp is older than maxAge relative to the clock. Returns the
 // number of entries reclaimed.
+//
+// A slot is reclaimed only when it is past maxAge AND no local pull is
+// registered for it (hasInFlightDownload): the sweep exists to reclaim
+// slots leaked by workers that died without their `defer Delete()`, and a
+// live downloadCancels registration means the worker is NOT dead, so
+// reclaiming mid-flight would re-dispatch a second concurrent writer on the
+// same inode (B5). Past absoluteCeiling the slot is reclaimed regardless of
+// in-flight state (backstop — see processingEntriesAbsoluteCeiling).
 func (m *Manager) sweepProcessingEntries(maxAge time.Duration) int {
-	cutoff := m.clock.Now().Add(-maxAge)
+	now := m.clock.Now()
+	cutoff := now.Add(-maxAge)
+	ceilingCutoff := now.Add(-m.absoluteCeiling())
 	reclaimed := 0
 	m.processingEntries.Range(func(key string, ts time.Time) bool {
-		if ts.Before(cutoff) {
+		pastCeiling := ts.Before(ceilingCutoff)
+		if pastCeiling || (ts.Before(cutoff) && !m.hasInFlightDownload(key)) {
 			m.processingEntries.Delete(key)
 			reclaimed++
 		}
@@ -66,7 +102,7 @@ func (m *Manager) sweepProcessingEntries(maxAge time.Duration) int {
 		m.logger.Warn().
 			Int("reclaimed", reclaimed).
 			Dur("ttl", maxAge).
-			Msg("Reclaimed leaked processingEntries (worker likely panicked)")
+			Msg("Reclaimed leaked processingEntries (no in-flight download; worker exited without cleanup or hit the absolute ceiling)")
 	}
 	return reclaimed
 }
@@ -179,6 +215,15 @@ func (m *Manager) processQueuedEntries() {
 		// The timestamp lets sweepProcessingEntries reclaim entries leaked by
 		// panicked/crashed worker goroutines (G6).
 		if _, loaded := m.processingEntries.LoadOrStore(entry.InfoHash, m.clock.Now()); loaded {
+			continue
+		}
+		// B5 early-out: a live local pull is already registered for this
+		// hash; re-submitting would put a second concurrent writer on the
+		// same inode. Release the slot just taken so a legitimate future
+		// re-process is not blocked. processAction is the authoritative
+		// guard; this is only a cheap early-out.
+		if m.hasInFlightDownload(entry.InfoHash) {
+			m.processingEntries.Delete(entry.InfoHash)
 			continue
 		}
 		if entry.IsTorrent() {
@@ -389,6 +434,20 @@ func (m *Manager) processQueuedTorrent(entry *storage.Entry) {
 }
 
 func (m *Manager) processAction(entry *storage.Entry) {
+	// Central chokepoint for the B5 dup-writer class: RegisterDownload below
+	// does downloadCancels.Store, which OVERWRITES any existing handle. If a
+	// live registration already exists a different goroutine is mid-pull on
+	// this hash; proceeding would orphan the original worker's cancel/done
+	// wiring (a DELETE could no longer cancel it) and start a second
+	// concurrent writer on the same inode. Bail before any state mutation.
+	if m.hasInFlightDownload(entry.InfoHash) {
+		m.logger.Info().
+			Str("name", entry.Name).
+			Str("infohash", entry.InfoHash).
+			Msg("Skipping duplicate processAction: a local pull is already in flight for this hash")
+		return
+	}
+
 	entry.Status = debridTypes.TorrentStatusDownloaded
 	entry.UpdatedAt = time.Now()
 	_ = m.queue.Update(entry)

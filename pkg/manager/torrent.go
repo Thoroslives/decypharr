@@ -143,6 +143,26 @@ func (m *Manager) doRefreshTorrents(_ context.Context, provider string, debridCl
 // flap, or freshly-completed RD torrents whose local pull hasn't yet hit
 // processAction could still slip through. This helper closes those edges.
 func (m *Manager) shouldSkipSyncForInFlight(infohash string) bool {
+	return m.hasInFlightDownload(infohash)
+}
+
+// hasInFlightDownload reports whether a local pull is currently registered
+// for infohash. A live downloadCancels entry means a worker holds an open
+// FD for this hash (Fix B registry). This is the single liveness predicate
+// shared by the sync-skip guard (Fix C), the processingEntries sweep, the
+// queue dispatcher, and the processAction chokepoint, so the dup-writer
+// class (B5) is gated in one consistent place.
+//
+// NZB is out of scope by construction: downloadCancels is populated only by
+// RegisterDownload on the torrent post-download path, so this predicate is
+// torrent-only. NZB dup-protection is tracked separately.
+//
+// Nil-safe: minimal Manager surfaces used by some unit tests do not wire
+// downloadCancels; a nil registry trivially has no in-flight downloads.
+func (m *Manager) hasInFlightDownload(infohash string) bool {
+	if m.downloadCancels == nil {
+		return false
+	}
 	_, active := m.downloadCancels.Load(infohash)
 	return active
 }
