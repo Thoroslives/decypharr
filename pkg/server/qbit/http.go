@@ -1,16 +1,33 @@
 package qbit
 
 import (
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
 
 	"github.com/sirrobot01/decypharr/internal/config"
+	"github.com/sirrobot01/decypharr/internal/customerror"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
 	"github.com/sirrobot01/decypharr/pkg/manager"
 	"github.com/sirrobot01/decypharr/pkg/storage"
 )
+
+// addFailureReason extracts a precise, distinct reason from an add-failure
+// error for logging. It is observability-only: it changes the debug log
+// line, never the HTTP response or control flow (the handler still returns
+// 400 for every add failure). A typed *customerror.Error surfaces as its
+// Code (e.g. "infringing_file" for an RD 451/DMCA rejection); anything else
+// stays "unknown" so the opaque-string case is still visible verbatim
+// alongside it.
+func addFailureReason(err error) string {
+	var customErr *customerror.Error
+	if errors.As(err, &customErr) && customErr.Code != "" {
+		return customErr.Code
+	}
+	return "unknown"
+}
 
 func (q *QBit) handleLogin(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -148,7 +165,9 @@ func (q *QBit) handleTorrentsAdd(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, url := range urlList {
 			if err := q.addMagnet(ctx, url, _arr, debridName, action, cfg.Notifications.CallbackURL, rmTrackerUrls, cfg.SkipMultiSeason); err != nil {
-				q.logger.Debug().Msgf("Error adding magnet: %s", err.Error())
+				q.logger.Debug().
+					Str("reason", addFailureReason(err)).
+					Msgf("Error adding magnet: %s", err.Error())
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}

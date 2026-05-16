@@ -503,7 +503,17 @@ func (r *RealDebrid) addMagnet(t *types.Torrent) (*types.Torrent, error) {
 		return nil, customerror.TooManyActiveDownloadsError
 
 	default:
-		return nil, fmt.Errorf("realdebrid API error: Status: %d", resp.StatusCode)
+		// Status-only classification (the RD error body is not decoded
+		// here). RD uses 451 specifically for infringing/DMCA content on
+		// /torrents/addMagnet, so surface it as a distinct typed error;
+		// every other non-2xx becomes a typed rejection that still carries
+		// the status in its message. Both are permanent / non-retryable, so
+		// the add-failure control flow is byte-identical to the prior
+		// flattened-string behaviour (still a 400, never ReQueue).
+		if resp.StatusCode == 451 {
+			return nil, customerror.InfringingFileError
+		}
+		return nil, customerror.NewDebridRejectionError(resp.StatusCode)
 	}
 }
 
