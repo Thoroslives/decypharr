@@ -217,7 +217,7 @@ func (m *Manager) Disable(account *Account) {
 		return
 	}
 
-	account.MarkDisabled(m.now())
+	account.MarkDisabled(m.now(), m.reprobeCooldown)
 
 	// If the disabled account is currently in use, refresh the current
 	// account via the same two-tier selection as Current()'s slow path:
@@ -242,6 +242,44 @@ func (m *Manager) Reset() {
 	} else {
 		m.current.Store(nil)
 	}
+}
+
+// HasUsableAccount reports whether selectAccount would return a genuinely
+// usable account right now: either a genuinely-active account, or a disabled
+// account whose re-probe cooldown has fully elapsed (a legitimate re-probe
+// candidate). It is FALSE exactly when the only thing selectAccount could
+// return is a within-cooldown disabled account via the all-disabled
+// fallback. The link service uses this as a pre-RD short-circuit: in that
+// false case, hitting the debrid would just re-cap and re-enter Disable
+// every refresh_interval (~15s) without ever letting the cooldown elapse, so
+// it fails fast with the transient error instead (no debrid round-trip, no
+// re-disable, no timestamp churn) until the cooldown actually elapses.
+func (m *Manager) HasUsableAccount() bool {
+	if len(m.Active()) > 0 {
+		return true
+	}
+	return len(m.cooledDisabledAccounts()) > 0
+}
+
+// EnableAccount clears the disabled state of the account identified by token
+// (implicit re-enable on a successful link validation). No-op if the token
+// is unknown or the account is not disabled.
+func (m *Manager) EnableAccount(token string) {
+	acc, err := m.GetAccount(token)
+	if err != nil || acc == nil {
+		return
+	}
+	if !acc.Disabled.Load() {
+		return
+	}
+	acc.Enable()
+	m.logger.Info().
+		Str("debrid", m.debrid).
+		Str("account_token", utils.Mask(acc.Token)).
+		Msg("Re-enabled account after a successful link validation (debrid recovered)")
+	// A freshly re-enabled account is the preferred current; refresh the
+	// two-tier selection so it is picked up immediately.
+	m.current.Store(m.selectAccount())
 }
 
 func (m *Manager) GetAccount(token string) (*Account, error) {

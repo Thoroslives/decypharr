@@ -98,6 +98,23 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 	if err := ctx.Err(); err != nil {
 		return emptyDownloadLink, err
 	}
+
+	// Pre-debrid short-circuit for the account-disable latch. If the active
+	// provider has NO usable account (every account disabled and none past
+	// its re-probe cooldown), making the debrid round-trip would just
+	// re-cap, re-enter disableLinkAccount and re-disable every
+	// refresh_interval (~15s) - the latch (slower, still restart-only).
+	// Fail fast with a transient account error WITHOUT the round-trip and
+	// WITHOUT touching Disable/MarkDisabled, so the cooldown timestamp is
+	// left to actually elapse. The error is CategoryAccountIssue (transient,
+	// never markEntryBad) so the entry stays retryable; once the cooldown
+	// elapses HasUsableAccount returns true and the next attempt re-probes.
+	if client, cerr := s.getClient(entry.ActiveProvider); cerr == nil {
+		if am := client.AccountManager(); am != nil && !am.HasUsableAccount() {
+			return emptyDownloadLink, NewAccountError(ErrNoActiveAccount, "account_cooldown_active")
+		}
+	}
+
 	link, err := s.fetchLink(ctx, entry, filename, attempt)
 	if err != nil {
 		return s.handleBadLink(ctx, err, entry, link, attempt)
@@ -162,6 +179,16 @@ func (s *Service) fetchAndValidate(ctx context.Context, entry *storage.Entry, fi
 	s.validated.Store(link.DownloadLink, validationErr)
 
 	if validationErr == nil {
+		// The link validated: the debrid demonstrably served this account.
+		// If that account was Disabled (a post-cooldown re-probe that
+		// succeeded because the debrid's limit window reset), implicitly
+		// re-enable it so it rejoins Active() and returns to normal instead
+		// of staying flagged forever as a tier-2 cooled re-probe candidate.
+		if client, cerr := s.getClient(link.Debrid); cerr == nil {
+			if am := client.AccountManager(); am != nil {
+				am.EnableAccount(link.Token)
+			}
+		}
 		return link, nil
 	}
 	return emptyDownloadLink, validationErr
@@ -400,7 +427,7 @@ func (s *Service) validateLink(ctx context.Context, link *types.DownloadLink) er
 // a genuinely-active account DISTINCT from the one just disabled is
 // available to retry on. swapped=false is the degenerate case (single
 // account, or every other account already disabled): the "swap" would be a
-// no-op, so the caller must NOT recurse — recursing there is the
+// no-op, so the caller must NOT recurse - recursing there is the
 // account-disable latch (an unbounded tight loop that only a process restart
 // breaks). The cooldown-based re-probe (account package) is what eventually
 // self-heals a degenerate single-account cap.

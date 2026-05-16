@@ -114,18 +114,50 @@ func (a *Account) StoreDownloadLinks(dls map[string]*types.DownloadLink) {
 	}
 }
 
-// MarkDisabled marks the account as disabled, increments the disable count
-// and stamps a FRESH disable timestamp at now. now MUST come from the same
-// clock usable() is later evaluated against (the Manager's injected clock):
-// mixing a wall-clock stamp with a fake-clock usable() check makes the
-// cooldown math incoherent. Re-disabling an already-disabled account (the
-// still-capped-after-cooldown case) deliberately rewrites the timestamp so
-// the cooldown window restarts from now: that turns the re-probe into a
-// cheap periodic check instead of a tight loop.
-func (a *Account) MarkDisabled(now time.Time) {
-	a.disabledAtNanos.Store(now.UnixNano())
+// MarkDisabled marks the account as disabled and increments the disable
+// count. now MUST come from the same clock usable() is later evaluated
+// against (the Manager's injected clock): mixing a wall-clock stamp with a
+// fake-clock usable() check makes the cooldown math incoherent.
+//
+// The disable timestamp (which drives the re-probe cooldown) is re-stamped
+// CONDITIONALLY, not unconditionally. It is rewritten to now ONLY on:
+//
+//	(a) an enabled->disabled transition (the account was not Disabled), or
+//	(b) a genuine post-cooldown re-probe that failed again: the account was
+//	    already Disabled but the cooldown HAD fully elapsed (usable() true),
+//	    so the backoff window legitimately restarts from now.
+//
+// It is PRESERVED on a spurious within-cooldown re-disable (already
+// Disabled AND still inside the cooldown). This is the critical invariant:
+// the Step-0 retryable-entry fix re-dispatches a stuck entry every
+// refresh_interval (~15s); each re-dispatch can re-enter the disable path
+// long before a 15-min cooldown elapses. Re-stamping unconditionally there
+// would push disabledAtNanos forward ~15s every ~15s, so the cooldown would
+// NEVER elapse and the time-based self-heal would never fire (the latch
+// would persist, just slower). Preserving the original stamp lets the
+// cooldown actually expire despite the intervening re-disables.
+func (a *Account) MarkDisabled(now time.Time, cooldown time.Duration) {
+	wasDisabled := a.Disabled.Load()
+	cooldownElapsed := wasDisabled && a.usable(now, cooldown)
+	if !wasDisabled || cooldownElapsed {
+		a.disabledAtNanos.Store(now.UnixNano())
+	}
 	a.Disabled.Store(true)
 	a.DisableCount.Add(1)
+}
+
+// Enable clears the disabled state and the cooldown timestamp so the account
+// rejoins Active() immediately. Called on a successful link validation
+// (implicit re-enable: the debrid has demonstrably recovered) so a
+// self-healed account actually returns to healthy state instead of staying
+// flagged forever as a tier-2 "cooled" re-probe candidate. Idempotent and
+// cheap; a no-op when the account was not disabled.
+func (a *Account) Enable() {
+	if !a.Disabled.Load() {
+		return
+	}
+	a.disabledAtNanos.Store(0)
+	a.Disabled.Store(false)
 }
 
 // Reset is an inert manual/operator force-clear hook: it un-disables the

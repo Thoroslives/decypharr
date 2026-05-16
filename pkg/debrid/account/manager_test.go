@@ -177,7 +177,7 @@ func TestDisabledAtRaceSafe(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				acc.MarkDisabled(clk.Now())
+				acc.MarkDisabled(clk.Now(), cooldown)
 			}
 		}()
 	}
@@ -194,5 +194,167 @@ func TestDisabledAtRaceSafe(t *testing.T) {
 
 	if acc.disabledAtNanos.Load() == 0 {
 		t.Fatal("after concurrent MarkDisabled calls the disable timestamp must be set (non-zero)")
+	}
+}
+
+// Defect #1 production-interaction regression: the Step-0 retryable-entry
+// fix re-dispatches a stuck entry every refresh_interval (~15s). Each
+// re-dispatch re-enters the disable path and calls Disable() again, long
+// before the (15min) cooldown elapses. If MarkDisabled re-stamps the
+// disable timestamp unconditionally (the 6d9696e behaviour), every ~15s
+// re-disable pushes disabledAtNanos forward ~15s, so now-disabledAt is
+// ALWAYS ~15s, NEVER >= cooldown: usable()/cooledDisabledAccounts() stay
+// perpetually empty, the time-based self-heal NEVER fires and the latch is
+// intact (just 1/15s instead of 1/s, still restart-only).
+//
+// The invariant: a sustained storm of within-cooldown re-disables MUST NOT
+// push the effective cooldown out. After total elapsed >= cooldown the
+// account becomes usable DESPITE the intervening re-disables.
+//
+// Fails on 6d9696e (unconditional re-stamp); passes with the conditional
+// re-stamp (preserve the original stamp while already-disabled AND still
+// within cooldown).
+func TestWithinCooldownReDisablesDoNotDeferSelfHeal(t *testing.T) {
+	clk := testutil.NewFakeClock(time.Now())
+	cooldown := 15 * time.Minute
+	m := newTestManager(t, []string{"tok-a"}, clk, cooldown)
+
+	acc := m.Current()
+	m.Disable(acc) // T0: enabled->disabled transition, stamps T0
+	stampAtT0 := acc.disabledAtNanos.Load()
+	if stampAtT0 == 0 {
+		t.Fatal("precondition: first Disable must stamp a non-zero disable timestamp")
+	}
+
+	// Phase 1 - the core Defect #1 invariant. Simulate the Step-0
+	// re-dispatch loop entirely WITHIN one cooldown window: every 15s the
+	// stuck entry is re-dispatched, the single account is re-selected (still
+	// capped) and Disable() is called again. Every one of these is a
+	// within-cooldown re-disable and MUST preserve the original T0 stamp.
+	// On 6d9696e (unconditional re-stamp) each iteration pushes the stamp
+	// forward ~15s, so now-disabledAt is forever ~15s and the cooldown can
+	// NEVER elapse (the latch, just slower). Stop one step short of the
+	// cooldown so the boundary is crossed in Phase 2 with NO intervening
+	// Disable() (this is exactly what the production pre-RD short-circuit
+	// guarantees: within-cooldown re-dispatches never reach Disable()).
+	const step = 15 * time.Second
+	withinCooldownIters := int(cooldown/step) - 2 // stay strictly inside the window
+	for i := 0; i < withinCooldownIters; i++ {
+		clk.Advance(step)
+		m.Disable(acc) // within-cooldown re-disable: MUST preserve the stamp
+		if got := acc.disabledAtNanos.Load(); got != stampAtT0 {
+			t.Fatalf("within-cooldown re-disable #%d pushed the disable timestamp forward (got %d, want the original %d); now-disabledAt resets to ~15s every re-dispatch so the cooldown NEVER elapses and the self-heal never fires (R7 latch intact, just slower)", i, got, stampAtT0)
+		}
+		if acc.usable(clk.Now(), cooldown) {
+			t.Fatalf("account became usable at within-cooldown iteration #%d (elapsed %v < cooldown %v); a just-capped account must not re-probe before its cooldown", i, time.Duration(i+1)*step, cooldown)
+		}
+	}
+
+	// Phase 2 - the cooldown now elapses (no further Disable(): the
+	// short-circuit gates re-dispatches in prod). The account MUST become a
+	// re-probe candidate despite the Phase-1 re-disable storm.
+	clk.Advance(2 * step) // crosses the original T0+cooldown boundary
+	if !acc.usable(clk.Now(), cooldown) {
+		t.Fatal("after the cooldown elapsed the account must be usable() again despite the intervening within-cooldown re-disables; the time-based self-heal is being indefinitely deferred (R7 latch persists, restart-only)")
+	}
+	cooled := m.cooledDisabledAccounts()
+	if len(cooled) != 1 || cooled[0].Token != acc.Token {
+		t.Fatalf("the cooled account must appear as a re-probe candidate after the cooldown despite the re-disable storm; cooledDisabledAccounts()=%d", len(cooled))
+	}
+	if got := m.Current(); got == nil || got.Token != acc.Token {
+		t.Fatal("Current() must re-probe the cooled single account after the cooldown elapses despite the intervening within-cooldown re-disables")
+	}
+
+	// Phase 3 - the periodic re-fire (condition (b)). The post-cooldown
+	// re-probe hits RD, is still capped, Disable() fires: this is a GENUINE
+	// failed re-probe so the backoff legitimately restarts. The account must
+	// go unusable again (a fresh window, not stuck-usable every tick) AND
+	// must self-heal AGAIN one cooldown later (periodic, never a permanent
+	// latch and never a permanent tight loop).
+	m.Disable(acc) // genuine post-cooldown re-probe failed -> restart backoff
+	if acc.usable(clk.Now(), cooldown) {
+		t.Fatal("immediately after a genuine post-cooldown re-disable the account must be unusable again (a fresh cooldown window); otherwise it re-probes every tick (a different tight loop)")
+	}
+	clk.Advance(cooldown + step)
+	if !acc.usable(clk.Now(), cooldown) {
+		t.Fatal("the self-heal must fire AGAIN one cooldown after a failed re-probe; the re-probe must be periodic, not one-shot")
+	}
+}
+
+// Defect #1 corollary: a GENUINE post-cooldown re-probe that fails again
+// MUST restart the backoff (re-stamp). This is condition (b) of the
+// conditional re-stamp and guards against over-correcting Defect #1 into
+// "never re-stamp" (which would make a still-capped account re-probe every
+// tick forever after the first cooldown -- a different tight loop).
+func TestPostCooldownReDisableRestartsBackoff(t *testing.T) {
+	clk := testutil.NewFakeClock(time.Now())
+	cooldown := 15 * time.Minute
+	m := newTestManager(t, []string{"tok-a"}, clk, cooldown)
+
+	acc := m.Current()
+	m.Disable(acc)
+	firstStamp := acc.disabledAtNanos.Load()
+
+	// Cooldown fully elapses -> genuine re-probe candidate.
+	clk.Advance(cooldown + time.Minute)
+	if !acc.usable(clk.Now(), cooldown) {
+		t.Fatal("precondition: account should be re-probable after the full cooldown")
+	}
+
+	// The genuine re-probe hits the debrid, is still capped, Disable()
+	// fires again. Because the cooldown HAD elapsed (usable() was true),
+	// this is condition (b): the backoff window must restart from now.
+	m.Disable(acc)
+	secondStamp := acc.disabledAtNanos.Load()
+	if secondStamp <= firstStamp {
+		t.Fatalf("a post-cooldown re-disable (genuine failed re-probe) must restart the backoff with a FRESH later timestamp; first=%d second=%d", firstStamp, secondStamp)
+	}
+	if acc.usable(clk.Now(), cooldown) {
+		t.Fatal("immediately after a post-cooldown re-disable the account must be unusable again (a fresh full cooldown window, not an immediate re-probe every tick)")
+	}
+}
+
+// Defect #2: a successful link validation on a Disabled (post-cooldown)
+// account must implicitly re-enable it so it returns to healthy state and
+// rejoins Active(). Pre-fix Disabled.Store(false) lived ONLY in the inert
+// Reset() hook (wired nowhere automatic), so a recovered account stayed
+// Disabled=true forever -- permanently excluded from Active(), stuck
+// cycling as a tier-2 cooled re-probe instead of returning to normal.
+//
+// Modelled at the account-manager level (EnableAccount is what the link
+// service calls on validationErr==nil). Fails pre-fix (no EnableAccount /
+// no implicit re-enable); passes after.
+func TestSuccessfulValidationReEnablesDisabledAccount(t *testing.T) {
+	clk := testutil.NewFakeClock(time.Now())
+	cooldown := 15 * time.Minute
+	m := newTestManager(t, []string{"tok-a"}, clk, cooldown)
+
+	acc := m.Current()
+	m.Disable(acc)
+	if !acc.Disabled.Load() {
+		t.Fatal("precondition: account must be Disabled after Disable()")
+	}
+	if len(m.Active()) != 0 {
+		t.Fatal("precondition: a Disabled single account must not be in Active()")
+	}
+
+	// Cooldown elapses, the re-probe hits the debrid and SUCCEEDS (RD's
+	// limit window reset). The link service calls EnableAccount on the
+	// account that just validated.
+	clk.Advance(cooldown + time.Minute)
+	m.EnableAccount(acc.Token)
+
+	if acc.Disabled.Load() {
+		t.Fatal("a successful validation must implicitly re-enable the account; it is still Disabled (a recovered account stays flagged forever, never returns to healthy state)")
+	}
+	if acc.disabledAtNanos.Load() != 0 {
+		t.Fatal("re-enable must clear the disable timestamp so the account is fully healthy, not a lingering cooled candidate")
+	}
+	active := m.Active()
+	if len(active) != 1 || active[0].Token != acc.Token {
+		t.Fatalf("the re-enabled account must rejoin Active(); got %d active", len(active))
+	}
+	if got := m.Current(); got == nil || got.Token != acc.Token || got.Disabled.Load() {
+		t.Fatal("Current() must return the re-enabled account via the fast/active path, not as a disabled fallback")
 	}
 }
