@@ -13,20 +13,21 @@ import (
 	"github.com/sirrobot01/decypharr/internal/testutil"
 	"github.com/sirrobot01/decypharr/internal/utils"
 	"github.com/sirrobot01/decypharr/pkg/arr"
-	"github.com/sirrobot01/decypharr/pkg/debrid/account"
 	debrid "github.com/sirrobot01/decypharr/pkg/debrid/common"
 	"github.com/sirrobot01/decypharr/pkg/debrid/types"
 )
 
-// rd451FakeClient is a minimal debrid.Client whose SubmitMagnet returns
-// exactly the error realdebrid.addMagnet now produces for the given status
-// (the typed seam is asserted end-to-end against a real HTTP 451 in
-// pkg/debrid/providers/realdebrid/addmagnet_typed_error_test.go). Here it
-// isolates the AddNewTorrent / SendToDebrid CONTROL FLOW so the ReQueue
-// invariant can be asserted without RD HTTP plumbing. Only SubmitMagnet and
-// Config are exercised on the add-failure path; the rest satisfy the
-// interface and must never be called by this path.
+// rd451FakeClient isolates the AddNewTorrent / SendToDebrid control flow:
+// SubmitMagnet returns exactly the error realdebrid.addMagnet now produces
+// for the rejected status (the typed seam itself is asserted end-to-end
+// against a real HTTP 451 in
+// pkg/debrid/providers/realdebrid/addmagnet_typed_error_test.go), so the
+// ReQueue invariant can be proven without RD HTTP plumbing. The embedded
+// debrid.Client is nil: any method other than the three overridden below
+// panics if the add-failure path wrongly reaches it (strict by design —
+// matches the stubClient idiom in link/disable_latch_test.go).
 type rd451FakeClient struct {
+	debrid.Client
 	submitErr error
 }
 
@@ -35,33 +36,6 @@ func (c *rd451FakeClient) SubmitMagnet(tr *types.Torrent) (*types.Torrent, error
 }
 func (c *rd451FakeClient) Config() config.Debrid  { return config.Debrid{Name: "realdebrid"} }
 func (c *rd451FakeClient) Logger() zerolog.Logger { return zerolog.Nop() }
-
-func (c *rd451FakeClient) CheckStatus(tr *types.Torrent) (*types.Torrent, error) {
-	panic("CheckStatus must not be reached on the add-failure path")
-}
-func (c *rd451FakeClient) GetDownloadLink(string, *types.File) (types.DownloadLink, error) {
-	panic("GetDownloadLink must not be reached on the add-failure path")
-}
-func (c *rd451FakeClient) DeleteTorrent(string) error { return nil }
-func (c *rd451FakeClient) IsAvailable([]string) map[string]bool {
-	return map[string]bool{}
-}
-func (c *rd451FakeClient) UpdateTorrent(*types.Torrent) error        { return nil }
-func (c *rd451FakeClient) GetTorrent(string) (*types.Torrent, error) { return nil, nil }
-func (c *rd451FakeClient) GetTorrents() ([]*types.Torrent, error)    { return nil, nil }
-func (c *rd451FakeClient) RefreshDownloadLinks() error               { return nil }
-func (c *rd451FakeClient) CheckFile(context.Context, string, string) error {
-	return nil
-}
-func (c *rd451FakeClient) AccountManager() *account.Manager    { return nil }
-func (c *rd451FakeClient) GetProfile() (*types.Profile, error) { return nil, nil }
-func (c *rd451FakeClient) GetAvailableSlots() (int, error)     { return 0, nil }
-func (c *rd451FakeClient) SyncAccounts()                       {}
-func (c *rd451FakeClient) DeleteLink(types.DownloadLink) error { return nil }
-func (c *rd451FakeClient) SpeedTest(context.Context) types.SpeedTestResult {
-	return types.SpeedTestResult{}
-}
-func (c *rd451FakeClient) SupportsCheck() bool { return false }
 
 // newManagerWithFakeRD wires the fake client into a Manager that has a real
 // bbolt-backed *Queue. This is the full add-failure control-flow path:

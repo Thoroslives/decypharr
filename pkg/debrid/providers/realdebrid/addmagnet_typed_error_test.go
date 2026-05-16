@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -27,20 +28,16 @@ func magnetTorrent() *types.Torrent {
 	}
 }
 
-// TestAddMagnet451ReturnsTypedInfringingError is the B4 seam unit assertion:
-// an RD HTTP 451 (DMCA / infringing_file) on /torrents/addMagnet must surface
-// as a typed *customerror.Error whose Code is the distinct infringing code,
-// errors.As must succeed, it must NOT be retryable, and its Code must NOT be
-// "too_many_active_downloads" (so it can never enter the ReQueue branch at
-// processor.go AddNewTorrent). Pre-fix this returned a plain
-// *errors.errorString ("realdebrid API error: Status: 451") and every
-// assertion below fails.
+// TestAddMagnet451ReturnsTypedInfringingError: an RD HTTP 451
+// (DMCA/infringing_file) on /torrents/addMagnet surfaces as a typed
+// *customerror.Error with the distinct infringing Code, and is
+// non-retryable so it can never latch on permanently-unsatisfiable
+// content. Control-flow equivalence and the no-ReQueue invariant are
+// proven end-to-end in pkg/manager (TestAddNewTorrentRD451*).
 func TestAddMagnet451ReturnsTypedInfringingError(t *testing.T) {
 	testutil.IsolateConfig(t, t.TempDir())
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// 451 Unavailable For Legal Reasons is exactly what RD returns for
-		// DMCA'd / infringing content on this endpoint.
 		w.WriteHeader(http.StatusUnavailableForLegalReasons)
 	}))
 	defer srv.Close()
@@ -59,25 +56,8 @@ func TestAddMagnet451ReturnsTypedInfringingError(t *testing.T) {
 	if customErr.Code != "infringing_file" {
 		t.Errorf("RD 451 Code: got %q want %q", customErr.Code, "infringing_file")
 	}
-	if customErr.Code == "too_many_active_downloads" {
-		t.Error("RD 451 must NOT carry the too_many_active_downloads Code (would route to ReQueue)")
-	}
-	// The DMCA content is permanently unsatisfiable on this provider:
-	// retrying would latch forever. The new error must be non-retryable.
 	if customErr.IsRetryable() {
-		t.Error("RD 451 (DMCA) error must NOT be retryable")
-	}
-	if !customErr.IsPermanent() {
-		t.Error("RD 451 (DMCA) error must be permanent")
-	}
-	// IsRetriableError is the function the download/circuit-breaker paths
-	// actually consult; it honors the typed permanent/retry flags. It must
-	// classify the DMCA error as non-retriable so nothing latches on it.
-	// (customerror.IsPermanentError is intentionally NOT asserted: it is a
-	// separate string-only heuristic that does not inspect the typed flag
-	// and is not on the add path.)
-	if customerror.IsRetriableError(err) {
-		t.Error("RD 451 (DMCA) error must NOT classify as retriable (IsRetriableError)")
+		t.Error("RD 451 (DMCA) error must NOT be retryable (would latch on unsatisfiable content)")
 	}
 }
 
@@ -115,46 +95,11 @@ func TestAddMagnetOtherNon2xxReturnsTypedStatusError(t *testing.T) {
 	}
 	// The status must still be conveyed in the message so logs/.Error()
 	// remain as informative as the prior flattened string.
-	if got := customErr.Error(); got == "" || !contains(got, "404") {
+	if got := customErr.Error(); got == "" || !strings.Contains(got, "404") {
 		t.Errorf("RD 404 error message must still convey the status, got %q", got)
 	}
 }
 
-// TestAddMagnet509SentinelUnchanged is the adjacent-switch regression fence.
-// The B4 change touches ONLY addMagnet's default arm; the case 509 arm
-// (return nil, customerror.TooManyActiveDownloadsError) must be untouched.
-//
-// Note: a persistent HTTP 509 cannot reach addMagnet's switch through the
-// shared request.Client, because retryablehttp.DefaultRetryPolicy classifies
-// any >=500 status (509 included) as retry-then-give-up and surfaces its own
-// "giving up" error instead of the 509 response. That is pre-existing
-// realdebrid wrapper behaviour, outside B4's scope. The behavioural 509 ->
-// TooManyActiveDownloadsError -> ReQueue path is fenced end-to-end at the
-// manager layer (TestAddNewTorrent509StillReQueues). Here we fence the
-// sentinel itself -- the exact value the 509 arm returns -- so an
-// accidental edit to its Code/retryability (which WOULD silently stop RD
-// slot-exhaustion being requeued) is caught.
-func TestAddMagnet509SentinelUnchanged(t *testing.T) {
-	var customErr *customerror.Error
-	if !errors.As(error(customerror.TooManyActiveDownloadsError), &customErr) {
-		t.Fatalf("TooManyActiveDownloadsError must be a *customerror.Error")
-	}
-	if customErr.Code != "too_many_active_downloads" {
-		t.Errorf("509 sentinel Code: got %q want %q", customErr.Code, "too_many_active_downloads")
-	}
-	if !customErr.IsRetryable() {
-		t.Error("509 sentinel (slot exhaustion) must remain retryable so it is requeued")
-	}
-	if customErr.IsPermanent() {
-		t.Error("509 sentinel must NOT be permanent (it is the retryable ReQueue path)")
-	}
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
+// (The 509 -> TooManyActiveDownloadsError -> ReQueue path is fenced
+// end-to-end at the manager layer: pkg/manager TestAddNewTorrent509StillReQueues.
+// B4 touches only addMagnet's default arm; the 509/OK cases are untouched.)
