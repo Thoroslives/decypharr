@@ -22,6 +22,16 @@ type Account struct {
 
 	// Account reactivation tracking
 	DisableCount atomic.Int32 `json:"disable_count"`
+
+	// disabledAtNanos is the unix-nanos timestamp of the most recent
+	// MarkDisabled, or 0 when the account has never been disabled / was
+	// Reset. Stored as an atomic.Int64 (not a bare time.Time) so concurrent
+	// link goroutines hitting MarkDisabled and usable() never see a torn or
+	// zero read: a torn read would make the cooldown either never elapse
+	// (permanent latch) or always elapse (near-full-speed re-probe loop),
+	// silently un-fixing the account-disable latch. It pairs with the
+	// Disabled atomic.Bool and uses the same lock-free idiom.
+	disabledAtNanos atomic.Int64
 }
 
 func (a *Account) Equals(other *Account) bool {
@@ -104,13 +114,49 @@ func (a *Account) StoreDownloadLinks(dls map[string]*types.DownloadLink) {
 	}
 }
 
-// MarkDisabled marks the account as disabled and increments the disable count
-func (a *Account) MarkDisabled() {
+// MarkDisabled marks the account as disabled, increments the disable count
+// and stamps a FRESH disable timestamp at now. now MUST come from the same
+// clock usable() is later evaluated against (the Manager's injected clock):
+// mixing a wall-clock stamp with a fake-clock usable() check makes the
+// cooldown math incoherent. Re-disabling an already-disabled account (the
+// still-capped-after-cooldown case) deliberately rewrites the timestamp so
+// the cooldown window restarts from now: that turns the re-probe into a
+// cheap periodic check instead of a tight loop.
+func (a *Account) MarkDisabled(now time.Time) {
+	a.disabledAtNanos.Store(now.UnixNano())
 	a.Disabled.Store(true)
 	a.DisableCount.Add(1)
 }
 
+// Reset is an inert manual/operator force-clear hook: it un-disables the
+// account immediately, bypassing the cooldown. It is intentionally NOT wired
+// to anything automatic; the cooldown-based re-probe in usable()/Manager is
+// the auto-heal path. Kept (cheap, harmless) so an operator who KNOWS the
+// debrid recovered can clear the latch without waiting out the cooldown.
 func (a *Account) Reset() {
 	a.DisableCount.Store(0)
+	a.disabledAtNanos.Store(0)
 	a.Disabled.Store(false)
+}
+
+// usable reports whether the account may be used for a (re-)probe at now.
+// An account is usable if it is not disabled, OR it is disabled but the
+// configured cooldown has fully elapsed since the last MarkDisabled (so a
+// debrid whose limit window has likely reset gets re-probed instead of
+// staying latched until a process restart). A non-positive cooldown or an
+// unset/zero disable timestamp on a disabled account is treated as "still
+// in cooldown" (not yet re-probable) so a mis-set cooldown fails closed
+// rather than degrading into a full-speed retry loop.
+func (a *Account) usable(now time.Time, cooldown time.Duration) bool {
+	if !a.Disabled.Load() {
+		return true
+	}
+	if cooldown <= 0 {
+		return false
+	}
+	disabledAt := a.disabledAtNanos.Load()
+	if disabledAt == 0 {
+		return false
+	}
+	return now.UnixNano()-disabledAt >= cooldown.Nanoseconds()
 }

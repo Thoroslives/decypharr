@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	json "github.com/bytedance/sonic"
 )
@@ -104,6 +105,12 @@ const (
 	RepairSourceManaged RepairSource = "managed"
 )
 
+// DefaultAccountReprobeCooldown is the fallback cooldown before a disabled
+// debrid account is re-probed. RD's limit windows (bandwidth/bytes/daily)
+// reset on the order of minutes-to-hours; 15m keeps re-probes cheap and
+// infrequent while still self-healing without a process restart.
+const DefaultAccountReprobeCooldown = 15 * time.Minute
+
 // RepairConfig is the single, global configuration for the health checker.
 // When Enabled is true, a recurring sweep runs on Schedule and visits only
 // entries that are unhealthy, dirty, or older than RecheckInterval.
@@ -147,10 +154,16 @@ type Config struct {
 	MinFileSize        string   `json:"min_file_size,omitempty"`
 	MaxFileSize        string   `json:"max_file_size,omitempty"`
 	RemoveStalledAfter string   `json:"remove_stalled_after,omitzero"`
-	EnableWebdavAuth   bool     `json:"enable_webdav_auth,omitempty"`
-	UseAuth            bool     `json:"use_auth,omitempty"`
-	NZBUserAgent       string   `json:"nzb_user_agent,omitempty"` // User agent for downloading NZBs
-	Auth               *Auth    `json:"-"`
+	// AccountReprobeCooldown is how long a debrid account that was disabled
+	// after an account-level error (e.g. RD bytes_limit_reached) stays
+	// out of selection before it becomes a re-probe candidate again. Empty
+	// uses DefaultAccountReprobeCooldown. Accepts the extended duration
+	// syntax (utils.ParseDuration: "15m", "1h", "1d", ...).
+	AccountReprobeCooldown string `json:"account_reprobe_cooldown,omitzero"`
+	EnableWebdavAuth       bool   `json:"enable_webdav_auth,omitempty"`
+	UseAuth                bool   `json:"use_auth,omitempty"`
+	NZBUserAgent           string `json:"nzb_user_agent,omitempty"` // User agent for downloading NZBs
+	Auth                   *Auth  `json:"-"`
 
 	DisableWebDav bool `json:"disable_webdav,omitempty"`
 
