@@ -647,6 +647,16 @@ func (m *Manager) RegisterDownload(infohash string, parent context.Context) (con
 	ctx, cancel := context.WithCancel(parent)
 	h := &downloadHandle{cancel: cancel, done: make(chan struct{})}
 	m.downloadCancels.Store(infohash, h)
+	// B5 heartbeat: stamp the processingEntries slot fresh now that a pull is
+	// registered, so it cannot age past the TTL while the (possibly hours-
+	// long, RD-throttled) download runs. The sweep's in-flight gate already
+	// protects an active pull; this also covers the brief window between the
+	// processQueuedEntries slot-take and here. Use the sweep's clock so the
+	// timestamp comparison stays consistent. Nil-safe for minimal test
+	// Managers that don't wire processingEntries/clock.
+	if m.processingEntries != nil && m.clock != nil {
+		m.processingEntries.Store(infohash, m.clock.Now())
+	}
 	release := func() {
 		cancel() // idempotent; repeated cancels are no-ops on context.WithCancel
 		m.downloadCancels.Delete(infohash)
