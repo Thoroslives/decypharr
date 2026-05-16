@@ -244,21 +244,24 @@ func (m *Manager) Reset() {
 	}
 }
 
-// HasUsableAccount reports whether selectAccount would return a genuinely
-// usable account right now: either a genuinely-active account, or a disabled
-// account whose re-probe cooldown has fully elapsed (a legitimate re-probe
-// candidate). It is FALSE exactly when the only thing selectAccount could
-// return is a within-cooldown disabled account via the all-disabled
-// fallback. The link service uses this as a pre-RD short-circuit: in that
-// false case, hitting the debrid would just re-cap and re-enter Disable
-// every refresh_interval (~15s) without ever letting the cooldown elapse, so
-// it fails fast with the transient error instead (no debrid round-trip, no
-// re-disable, no timestamp churn) until the cooldown actually elapses.
+// HasUsableAccount reports whether any account is usable now (genuinely
+// active, or disabled with its re-probe cooldown elapsed). The link service
+// uses it as a pre-RD short-circuit: when false, hitting the debrid would
+// only re-cap and re-enter Disable every refresh_interval without letting
+// the cooldown elapse, so it fails fast with the transient error until the
+// cooldown actually expires. Single allocation-free pass (no slice, no
+// sort) — it is on the GetLink path, including the healthy case.
 func (m *Manager) HasUsableAccount() bool {
-	if len(m.Active()) > 0 {
+	now := m.now()
+	found := false
+	m.accounts.Range(func(_ string, acc *Account) bool {
+		if acc.usable(now, m.reprobeCooldown) {
+			found = true
+			return false // stop at the first usable account
+		}
 		return true
-	}
-	return len(m.cooledDisabledAccounts()) > 0
+	})
+	return found
 }
 
 // EnableAccount clears the disabled state of the account identified by token

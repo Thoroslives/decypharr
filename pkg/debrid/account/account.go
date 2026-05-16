@@ -114,28 +114,17 @@ func (a *Account) StoreDownloadLinks(dls map[string]*types.DownloadLink) {
 	}
 }
 
-// MarkDisabled marks the account as disabled and increments the disable
-// count. now MUST come from the same clock usable() is later evaluated
-// against (the Manager's injected clock): mixing a wall-clock stamp with a
-// fake-clock usable() check makes the cooldown math incoherent.
+// MarkDisabled marks the account disabled. now MUST come from the same
+// clock usable() is evaluated against (mixing a wall-clock stamp with a
+// fake-clock usable() check makes the cooldown math incoherent).
 //
 // The disable timestamp (which drives the re-probe cooldown) is re-stamped
-// CONDITIONALLY, not unconditionally. It is rewritten to now ONLY on:
-//
-//	(a) an enabled->disabled transition (the account was not Disabled), or
-//	(b) a genuine post-cooldown re-probe that failed again: the account was
-//	    already Disabled but the cooldown HAD fully elapsed (usable() true),
-//	    so the backoff window legitimately restarts from now.
-//
-// It is PRESERVED on a spurious within-cooldown re-disable (already
-// Disabled AND still inside the cooldown). This is the critical invariant:
-// the Step-0 retryable-entry fix re-dispatches a stuck entry every
-// refresh_interval (~15s); each re-dispatch can re-enter the disable path
-// long before a 15-min cooldown elapses. Re-stamping unconditionally there
-// would push disabledAtNanos forward ~15s every ~15s, so the cooldown would
-// NEVER elapse and the time-based self-heal would never fire (the latch
-// would persist, just slower). Preserving the original stamp lets the
-// cooldown actually expire despite the intervening re-disables.
+// CONDITIONALLY: on an enabled->disabled transition, or on a genuine
+// post-cooldown re-probe that failed again (was Disabled, cooldown had
+// elapsed, usable() true). It is PRESERVED on a within-cooldown re-disable
+// — re-stamping there would push the timestamp forward as fast as
+// re-dispatches arrive, so the cooldown would never elapse and the
+// self-heal would never fire.
 func (a *Account) MarkDisabled(now time.Time, cooldown time.Duration) {
 	wasDisabled := a.Disabled.Load()
 	cooldownElapsed := wasDisabled && a.usable(now, cooldown)

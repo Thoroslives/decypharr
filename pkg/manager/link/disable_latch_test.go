@@ -22,7 +22,7 @@ import (
 // R7 invariant (a): a single disabled account hit by a persistent RD cap
 // (bytes_limit_reached) must NOT make fetchAndValidate recurse unboundedly.
 //
-// Pre-fix chain (service.go:128-140): validateLink returns an account error
+// The latch this guards against: validateLink returns an account error
 // -> disableLinkAccount marks the single account Disabled and wipes the
 // validation cache -> the code recurses with the SAME attempt. The single
 // account has no genuinely-active sibling, so Manager.Current()'s

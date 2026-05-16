@@ -527,18 +527,12 @@ func (d *Downloader) processTorrentDownload(ctx context.Context, entry *storage.
 		tasks = append(tasks, downloadTask{file: file, link: downloadLink.DownloadLink})
 	}
 
-	// If no valid download links were obtained, return error instead of
-	// panic. download() set IsDownloading=true and persisted it; the
-	// processAction caller logs this error and returns WITHOUT calling
-	// markAsError, so nothing else clears the flag. Leaving it set wedges
-	// the entry permanently: processQueuedEntries' "if entry.IsDownloading
-	// { continue }" then skips it on every tick until a process restart
-	// (storage.go resets the flag on startup) -- the same restart-only
-	// symptom as the account-disable latch, just silent. Reset it (and keep
-	// State=EntryStateDownloading, NOT Error/Bad: a transient account cap
-	// must stay retryable) so the next processQueuedEntries tick
-	// re-dispatches it, at which point the account-package re-probe cooldown
-	// can give it a genuine retry.
+	// No valid links. download() persisted IsDownloading=true and the
+	// processAction caller returns this error without markAsError, so
+	// nothing clears it -> processQueuedEntries skips the entry forever
+	// (until a restart). Reset it, keeping State=EntryStateDownloading (NOT
+	// Error/Bad: a transient account cap must stay retryable) so the next
+	// tick re-dispatches and the account cooldown can give it a real retry.
 	if len(tasks) == 0 {
 		entry.IsDownloading = false
 		entry.UpdatedAt = time.Now()
