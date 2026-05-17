@@ -17,13 +17,12 @@ type QBit struct {
 	Tags                    []string
 	manager                 *manager.Manager
 
-	// Speed-smoothing cache. In-memory only; never persisted.
-	// Guards B2: replaces the instantaneous grab meter with a Δ-bytes/Δ-time
-	// rate derived from the truthful SizeDownloaded counter between qbit polls.
-	// Pruned to the live torrent set each poll to prevent unbounded growth (DA C5).
-	speedMu     sync.Mutex
-	speedCache  map[string]speedSample
-	lastDerived map[string]int64
+	// Per-hash instantaneous-dlspeed cache: a Δ-bytes/Δ-time rate from the
+	// truthful SizeDownloaded counter between qbit polls, replacing grab's
+	// optimistic meter. In-memory only; pruned to the live torrent set each
+	// poll so it cannot grow unbounded.
+	speedMu    sync.Mutex
+	speedCache map[string]speedSample
 }
 
 func New(manager *manager.Manager) *QBit {
@@ -35,6 +34,5 @@ func New(manager *manager.Manager) *QBit {
 		manager:                 manager,
 		logger:                  logger.New("qbit"),
 		speedCache:              make(map[string]speedSample),
-		lastDerived:             make(map[string]int64),
 	}
 }

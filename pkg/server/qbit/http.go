@@ -113,16 +113,15 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 		current[t.InfoHash] = struct{}{}
 		_, held := pending[t.InfoHash]
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t, held)
-		// B2: override the instantaneous dlspeed with a rate derived from the
+		// Override the instantaneous dlspeed with a rate derived from the
 		// truthful SizeDownloaded counter (Δbytes/Δwall-clock between polls),
-		// replacing grab's ~30%-optimistic BytesPerSecond meter. Only applied
-		// while actively downloading; all other states already report 0.
+		// replacing grab's optimistic BytesPerSecond meter. Only while actively
+		// downloading; all other states already report 0.
 		if qbitTorrents[i].State == storage.EntryStateDownloading {
 			qbitTorrents[i].Dlspeed = q.deriveDlspeed(t.InfoHash, t.SizeDownloaded, now)
 		}
 	}
-	// DA C5: prune cache to the live torrent set so it can't grow unbounded
-	// over a long-lived container session.
+	// Bound the cache to the live torrent set so it can't grow unbounded.
 	q.pruneSpeedCache(current)
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
@@ -233,29 +232,25 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 				Msg("download worker did not exit within timeout; unlinking anyway")
 		}
 
-		// B1/B2: route through the store-symmetric delete. A completed or
-		// sync-adopted entry lives in the entries store, not the queue, so
-		// the old queue-only Queue.Delete was a silent no-op that still
-		// returned 200, left the local files orphaned, and let the sync
-		// loop re-adopt the surviving RD entry forever. DeleteSymmetric
-		// resolves the entry from whichever store holds it, writes the
-		// tombstone FIRST (so a concurrent sync tick can't re-adopt in the
-		// gap), removes the local files, then removes the store record(s).
-		// The cleanup closure is RD-removal ONLY: file delete and store
-		// delete are owned by DeleteSymmetric, so doing them here too would
-		// be a double-delete. Fire-and-forget RemoveTorrentPlacements
-		// because RD API calls take 1-2s and the HTTP response shouldn't
-		// block on remote provider state; it iterates t.Providers, so an
-		// entry with no providers is a no-op.
+		// A completed or sync-adopted entry lives in the entries store, not
+		// the queue, so the old queue-only Queue.Delete was a silent no-op
+		// that still returned 200, left the local files orphaned, and let
+		// the sync loop re-adopt the surviving RD entry forever.
+		// DeleteSymmetric resolves the entry from whichever store holds it,
+		// writes the tombstone first (so a concurrent sync tick can't
+		// re-adopt in the gap), removes the local files, then the store
+		// record(s). The cleanup closure is RD-removal only - file and store
+		// deletion are owned by DeleteSymmetric, so doing them here too would
+		// double-delete. RemoveTorrentPlacements is fire-and-forget because
+		// RD calls take 1-2s and the HTTP response shouldn't block on it.
 		err := q.manager.Storage().DeleteSymmetric(hash, func(e *storage.Entry) error {
 			go q.manager.RemoveTorrentPlacements(e)
 			return nil
 		})
 		if err != nil {
-			// Not-found in BOTH stores is now a real 404 instead of a
-			// silent 200 - the caller (Sonarr/Radarr) must know the delete
-			// did not happen so it stops treating a no-op as success.
-			if strings.Contains(err.Error(), "not found in queue or entries") {
+			// Not-found in both stores is a real 404, not a silent 200, so
+			// the caller knows the delete did not happen.
+			if errors.Is(err, storage.ErrNotFound) {
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
 			}

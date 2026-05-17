@@ -12,8 +12,7 @@ import (
 // so this is sufficient for all dlspeed tests.
 func newTestQBit() *QBit {
 	return &QBit{
-		speedCache:  make(map[string]speedSample),
-		lastDerived: make(map[string]int64),
+		speedCache: make(map[string]speedSample),
 	}
 }
 
@@ -58,36 +57,24 @@ func TestDeriveDlspeed(t *testing.T) {
 	}
 }
 
-// TestPruneSpeedCache guards DA-C5: the cache must be bounded to the live
-// torrent set. After pruning, only the hashes in the live set survive.
+// TestPruneSpeedCache: the cache must be bounded to the live torrent set.
+// After pruning, only the hashes in the live set survive.
 func TestPruneSpeedCache(t *testing.T) {
 	q := newTestQBit()
 	now := time.Now()
 
-	// Seed A, B, C into both maps.
 	for _, h := range []string{"A", "B", "C"} {
-		q.speedCache[h] = speedSample{size: 1000, at: now}
-		q.lastDerived[h] = 100
+		q.speedCache[h] = speedSample{size: 1000, at: now, lastRate: 100}
 	}
 
-	// Prune to only A.
 	q.pruneSpeedCache(map[string]struct{}{"A": {}})
 
-	// A must survive in both maps.
 	if _, ok := q.speedCache["A"]; !ok {
 		t.Error("speedCache: A should have survived pruning")
 	}
-	if _, ok := q.lastDerived["A"]; !ok {
-		t.Error("lastDerived: A should have survived pruning")
-	}
-
-	// B and C must be evicted from both maps.
 	for _, evicted := range []string{"B", "C"} {
 		if _, ok := q.speedCache[evicted]; ok {
 			t.Errorf("speedCache: %s should have been pruned", evicted)
-		}
-		if _, ok := q.lastDerived[evicted]; ok {
-			t.Errorf("lastDerived: %s should have been pruned", evicted)
 		}
 	}
 }

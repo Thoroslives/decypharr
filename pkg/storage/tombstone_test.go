@@ -71,10 +71,16 @@ func TestForEachTombstoneSkipsCorrupt(t *testing.T) {
 
 func TestPruneExpiredTombstones(t *testing.T) {
 	s := newTestStorage(t)
-	if err := s.PutTombstone("fresh1"); err != nil { t.Fatal(err) }
-	if err := s.PutTombstone("fresh2"); err != nil { t.Fatal(err) }
+	if err := s.PutTombstone("fresh1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutTombstone("fresh2"); err != nil {
+		t.Fatal(err)
+	}
 	stale := TombstoneRecord{InfoHash: "stale", DeletedAt: time.Now().Add(-(tombstoneTTL + time.Hour))}
-	if err := s.putTombstoneRecord("stale", &stale); err != nil { t.Fatal(err) }
+	if err := s.putTombstoneRecord("stale", &stale); err != nil {
+		t.Fatal(err)
+	}
 	if n := s.PruneExpiredTombstones(); n != 1 {
 		t.Fatalf("PruneExpiredTombstones: want 1 pruned, got %d", n)
 	}

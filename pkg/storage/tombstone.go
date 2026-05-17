@@ -27,11 +27,16 @@ type TombstoneRecord struct {
 // Rationale: RD fair-use caps have been observed to last days (3+ days
 // sustained in production). A short TTL would re-open the re-adopt loop in
 // exactly the scenario this tombstone must survive. The "long TTL blocks a
-// legit re-grab" downside is neutralised by an explicit-add-clears path (a
-// later task), so the risk is asymmetric - err long. A fixed constant is used
-// rather than a manager-side window because the self-heal check runs at the
-// storage layer where no runtime config is available.
+// legit re-grab" downside is neutralised because AddNewTorrent clears the
+// tombstone on an explicit re-grab, so the risk is asymmetric - err long. A
+// fixed constant is used rather than a manager-side window because the
+// self-heal check runs at the storage layer where no runtime config exists.
 const tombstoneTTL = 7 * 24 * time.Hour
+
+// isExpired reports whether a tombstone has aged past tombstoneTTL.
+func isExpired(r *TombstoneRecord) bool {
+	return time.Since(r.DeletedAt) >= tombstoneTTL
+}
 
 // putTombstoneRecord marshals and persists a TombstoneRecord keyed by lowercased
 // infohash. Separated from PutTombstone so tests can inject backdated records.
@@ -65,7 +70,7 @@ func (s *Storage) IsTombstoned(infohash string) bool {
 	if err := json.Unmarshal(data, &rec); err != nil {
 		return false
 	}
-	if time.Since(rec.DeletedAt) >= tombstoneTTL {
+	if isExpired(&rec) {
 		// Lazy self-heal: best-effort delete of the expired record. Mirrors the
 		// PersistedAt self-heal pattern in DrainPersistedRequeue.
 		_ = s.DeleteTombstone(infohash)
@@ -83,11 +88,10 @@ func (s *Storage) DeleteTombstone(infohash string) error {
 // on one record is skipped (best-effort) so a single corrupt entry can't block
 // iteration of the rest.
 //
-// Carved-out interaction: the R8 dead errors.Is at hybrid/store.go:434 can
-// truncate ForEach under concurrent delete, so a prune pass may under-collect.
-// This is harmless - self-heals next sweep; IsTombstoned uses Get, not ForEach,
-// so blocking correctness is unaffected. R8 is a separately-tracked item, not
-// introduced here.
+// Known interaction: the dead errors.Is at hybrid/store.go:434 can truncate
+// ForEach under concurrent delete, so a prune pass may under-collect. Harmless
+// here - it self-heals on the next sweep, and IsTombstoned uses Get (not
+// ForEach) so re-adoption-blocking correctness is unaffected.
 func (s *Storage) ForEachTombstone(fn func(key string, r *TombstoneRecord) error) error {
 	return s.tombstone.ForEach(func(key string, value []byte) error {
 		var rec TombstoneRecord
@@ -104,7 +108,7 @@ func (s *Storage) ForEachTombstone(fn func(key string, r *TombstoneRecord) error
 func (s *Storage) PruneExpiredTombstones() int {
 	var expired []string
 	_ = s.ForEachTombstone(func(key string, r *TombstoneRecord) error {
-		if time.Since(r.DeletedAt) >= tombstoneTTL {
+		if isExpired(r) {
 			expired = append(expired, key)
 		}
 		return nil

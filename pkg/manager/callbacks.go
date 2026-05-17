@@ -38,7 +38,7 @@ func (m *Manager) RemoveTorrentPlacements(t *storage.Entry) {
 				break
 			}
 			if attempt < maxRDRemoveAttempts {
-				time.Sleep(time.Duration(attempt) * rdRemoveBackoffBase) // 1s, 2s
+				time.Sleep(time.Duration(attempt) * rdRemoveBackoffBase)
 			}
 		}
 		if err != nil {

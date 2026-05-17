@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -126,8 +127,8 @@ func TestDeleteSymmetric(t *testing.T) {
 		s := newTestStorage(t)
 		calls := 0
 		err := s.DeleteSymmetric(hashNeither, func(*Entry) error { calls++; return nil })
-		if err == nil {
-			t.Fatal("expected non-nil error when entry is in neither store")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound when entry is in neither store, got %v", err)
 		}
 		if calls != 0 {
 			t.Errorf("cleanup called %d times, want 0 for a no-op delete", calls)

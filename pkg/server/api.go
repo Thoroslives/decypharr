@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -368,12 +369,11 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 		s.logger.Warn().Err(err).Str("infohash", hash).Msg("download worker did not exit within timeout; unlinking anyway")
 	}
 
-	// B1/B2: route through the store-symmetric delete. DeleteSymmetric owns
-	// the tombstone-first ordering, the local-file delete, and the store
-	// record removal across BOTH the queue and entries stores, so the
-	// cleanup closure here is RD-removal ONLY. The old EntryExists ->
-	// DeleteEntry(.., true) branch is dropped: DeleteSymmetric already
-	// removes the store record, so calling DeleteEntry too would be a
+	// DeleteSymmetric owns the tombstone-first ordering, the local-file
+	// delete, and the store-record removal across BOTH the queue and entries
+	// stores, so the cleanup closure here is RD-removal only. The old
+	// EntryExists -> DeleteEntry(.., true) branch is dropped: DeleteSymmetric
+	// already removes the store record, so calling DeleteEntry too would
 	// double-delete. When not removeFromDebrid the cleanup is nil.
 	var cleanup func(torrent *storage.Entry) error
 	if removeFromDebrid {
@@ -384,7 +384,7 @@ func (s *Server) handleDeleteTorrent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.manager.Storage().DeleteSymmetric(hash, cleanup); err != nil {
-		if strings.Contains(err.Error(), "not found in queue or entries") {
+		if errors.Is(err, storage.ErrNotFound) {
 			s.logger.Warn().Err(err).Str("hash", hash).Msg("Delete: entry not found in queue or entries")
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
@@ -414,11 +414,11 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// B1/B2: same store-symmetric reroute as handleDeleteTorrent. The old
-	// site passed empty category/state to Queue().DeleteWhere, so a per-hash
+	// Same store-symmetric reroute as handleDeleteTorrent. The old site
+	// passed empty category/state to Queue().DeleteWhere, so a per-hash
 	// DeleteSymmetric loop is behaviour-equivalent for the requested hashes
-	// (do NOT reimplement the ListFilterFunc predicate). The cleanup closure
-	// is RD-removal ONLY; DeleteSymmetric owns file + store removal.
+	// (do not reimplement the ListFilterFunc predicate). The cleanup closure
+	// is RD-removal only; DeleteSymmetric owns file + store removal.
 	var cleanup func(torrent *storage.Entry) error
 	if removeFromDebrid {
 		cleanup = func(t *storage.Entry) error {
@@ -428,7 +428,7 @@ func (s *Server) handleDeleteTorrents(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, hash := range hashes {
 		if err := s.manager.Storage().DeleteSymmetric(hash, cleanup); err != nil {
-			if strings.Contains(err.Error(), "not found in queue or entries") {
+			if errors.Is(err, storage.ErrNotFound) {
 				s.logger.Warn().Err(err).Str("hash", hash).Msg("Delete: entry not found in queue or entries")
 				http.Error(w, err.Error(), http.StatusNotFound)
 				return
