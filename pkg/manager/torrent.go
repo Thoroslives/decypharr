@@ -226,6 +226,16 @@ func (m *Manager) detectTorrentChanges(provider string, remoteTorrentsByHash map
 	// Check for brand new torrents (not in cache at all)
 	for infohash, t := range remoteTorrentsByHash {
 		if !cachedInfoHashes[infohash] {
+			// Belt-and-braces with the processSyncTorrent re-adoption gate:
+			// a deliberately-deleted hash that is still on the debrid must
+			// not be classified as "new", so it never even fans out a
+			// worker. Only the brand-new branch is filtered here; an entry
+			// that is still cached follows the existing update/delete
+			// classification untouched.
+			if m.storage.IsTombstoned(infohash) {
+				m.logger.Debug().Str("infohash", infohash).Msg("skip re-adopt: tombstoned (new-filter)")
+				continue
+			}
 			newTorrents = append(newTorrents, t)
 		}
 	}
@@ -397,6 +407,19 @@ func (m *Manager) processSyncTorrent(t *types.Torrent) (*storage.Entry, error) {
 	// or an in-memory cache, but storage.GetReader is likely fast (indexed by InfoHash)
 	mt, err := m.storage.Get(t.InfoHash)
 	if err != nil {
+		// Re-adoption gate: a deliberate deletion writes a tombstone first
+		// (DeleteSymmetric). If this hash was explicitly removed but is still
+		// present on the debrid, do NOT rebuild a fresh entry for it - that
+		// re-adoption spawns a new local-pull worker and re-opens the
+		// .fuse_hidden loop. Returning (nil, nil) is the contract here:
+		// processNewTorrents only writes when mt != nil, so a nil entry is
+		// silently skipped (no error - an error would log-spam that path).
+		// An explicit re-grab clears the tombstone (AddNewTorrent), so an
+		// intentional re-add still proceeds normally.
+		if m.storage.IsTombstoned(t.InfoHash) {
+			m.logger.Debug().Str("infohash", t.InfoHash).Msg("skip re-adopt: tombstoned")
+			return nil, nil
+		}
 		// Create new managed torrent
 		var magnet *utils.Magnet
 		if t.Magnet == nil || t.Magnet.Link == "" {

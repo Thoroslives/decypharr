@@ -50,8 +50,15 @@ func newManagerWithFakeRD(t *testing.T, submitErr error) (*Manager, *Queue) {
 	clients.Store("realdebrid", &rd451FakeClient{submitErr: submitErr})
 
 	m := &Manager{
-		clients:           clients,
-		queue:             q,
+		clients: clients,
+		queue:   q,
+		// The real Manager (New(), manager.go) always has storage wired;
+		// AddNewTorrent now clears a deletion tombstone as its first
+		// statement (the explicit-re-grab-clears-tombstone path), so the
+		// helper must reflect that production surface. On a hash with no
+		// tombstone the clear is a harmless no-op Delete and does not alter
+		// the add-failure control flow these tests assert.
+		storage:           strg,
 		processingEntries: xsync.NewMap[string, time.Time](),
 		downloadCancels:   xsync.NewMap[string, *downloadHandle](),
 		logger:            zerolog.Nop(),

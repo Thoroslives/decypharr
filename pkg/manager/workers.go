@@ -125,6 +125,23 @@ func (m *Manager) addQueueProcessorJob(ctx context.Context) error {
 		}
 	}
 
+	// Tombstone prune job: remove expired deletion tombstones so they don't
+	// accumulate indefinitely. Runs on the same cadence as the processing-entries
+	// sweep (1m) - both are low-cost maintenance passes.
+	if jd, err := utils.ConvertToJobDef(processingEntriesSweepEvery.String()); err != nil {
+		m.logger.Error().Err(err).Msg("Failed to convert tombstone prune interval to job definition")
+	} else {
+		if _, err := m.scheduler.NewJob(jd, gocron.NewTask(func() {
+			if n := m.storage.PruneExpiredTombstones(); n > 0 {
+				m.logger.Debug().Int("count", n).Msg("Pruned expired deletion tombstones")
+			}
+		}), gocron.WithContext(ctx), gocron.WithName("tombstone-prune")); err != nil {
+			m.logger.Error().Err(err).Msg("Failed to create tombstone prune job")
+		} else {
+			m.logger.Debug().Msgf("Tombstone prune job scheduled for every %s", processingEntriesSweepEvery)
+		}
+	}
+
 	if m.config.RemoveStalledAfter != "" {
 		// Stalled torrents removal job
 		if jd, err := utils.ConvertToJobDef("1m"); err != nil {

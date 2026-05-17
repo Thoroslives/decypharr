@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -105,11 +106,23 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	// (waiting for a free worker slot) is reported queuedDL, not stalledDL, so
 	// Radarr treats it as queued rather than stalled.
 	pending := q.manager.PendingJobIDs()
+	now := time.Now()
+	current := make(map[string]struct{}, len(torrents))
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
+		current[t.InfoHash] = struct{}{}
 		_, held := pending[t.InfoHash]
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t, held)
+		// Override the instantaneous dlspeed with a rate derived from the
+		// truthful SizeDownloaded counter (Δbytes/Δwall-clock between polls),
+		// replacing grab's optimistic BytesPerSecond meter. Only while actively
+		// downloading; all other states already report 0.
+		if qbitTorrents[i].State == storage.EntryStateDownloading {
+			qbitTorrents[i].Dlspeed = q.deriveDlspeed(t.InfoHash, t.SizeDownloaded, now)
+		}
 	}
+	// Bound the cache to the live torrent set so it can't grow unbounded.
+	q.pruneSpeedCache(current)
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
 
@@ -219,29 +232,30 @@ func (q *QBit) handleTorrentsDelete(w http.ResponseWriter, r *http.Request) {
 				Msg("download worker did not exit within timeout; unlinking anyway")
 		}
 
-		// Fix B.4: capture the entry BEFORE Queue.Delete so we can clean up
-		// the upstream debrid placement after. Queue.Delete removes the row
-		// from bbolt, so a post-delete Get would fail. We ignore the lookup
-		// error: if the entry isn't queued (e.g. already completed and moved
-		// to main storage), there's nothing for the RD-side cleanup to act
-		// on at this layer.
-		entry, _ := q.manager.Queue().GetTorrent(hash)
-
-		err := q.manager.Queue().Delete(hash, nil)
-		if err != nil && !strings.Contains(err.Error(), "not found") {
+		// A completed or sync-adopted entry lives in the entries store, not
+		// the queue, so the old queue-only Queue.Delete was a silent no-op
+		// that still returned 200, left the local files orphaned, and let
+		// the sync loop re-adopt the surviving RD entry forever.
+		// DeleteSymmetric resolves the entry from whichever store holds it,
+		// writes the tombstone first (so a concurrent sync tick can't
+		// re-adopt in the gap), removes the local files, then the store
+		// record(s). The cleanup closure is RD-removal only - file and store
+		// deletion are owned by DeleteSymmetric, so doing them here too would
+		// double-delete. RemoveTorrentPlacements is fire-and-forget because
+		// RD calls take 1-2s and the HTTP response shouldn't block on it.
+		err := q.manager.Storage().DeleteSymmetric(hash, func(e *storage.Entry) error {
+			go q.manager.RemoveTorrentPlacements(e)
+			return nil
+		})
+		if err != nil {
+			// Not-found in both stores is a real 404, not a silent 200, so
+			// the caller knows the delete did not happen.
+			if errors.Is(err, storage.ErrNotFound) {
+				http.Error(w, err.Error(), http.StatusNotFound)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
-		}
-
-		// Fix B.4: remove the upstream debrid placement so the sync loop on
-		// next tick doesn't re-discover the still-extant RD entry and
-		// re-import the torrent (the loop that produced the "re-grabbed
-		// Terminator 2 every 30s after delete" behavior). Fire-and-forget
-		// because RD API calls take 1-2s and the HTTP response shouldn't
-		// block on remote provider state. RemoveTorrentPlacements iterates
-		// t.Providers, so an entry with no providers is a no-op.
-		if entry != nil {
-			go q.manager.RemoveTorrentPlacements(entry)
 		}
 	}
 

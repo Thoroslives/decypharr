@@ -109,6 +109,17 @@ func (m *Manager) sweepProcessingEntries(maxAge time.Duration) int {
 
 // AddNewTorrent creates a torrent from import request and processes it
 func (m *Manager) AddNewTorrent(ctx context.Context, importReq *ImportRequest) error {
+	// Deliberate re-grab clears any deletion tombstone for this hash FIRST,
+	// before anything else touches storage. An explicit add (user, Radarr,
+	// qbit - all funnel here via addMagnet/addTorrent) is an intentional
+	// signal that overrides a prior deletion, so the sync re-adoption gate
+	// (processSyncTorrent / detectTorrentChanges) must stop blocking it.
+	// Best-effort only - the tombstone TTL self-heals, so a missed clear
+	// here is reclaimed later and never permanently strands a re-grab.
+	if err := m.storage.DeleteTombstone(importReq.Magnet.InfoHash); err != nil {
+		m.logger.Warn().Err(err).Str("infohash", importReq.Magnet.InfoHash).Msg("failed to clear deletion tombstone on explicit add")
+	}
+
 	var (
 		debridTorrent *debridTypes.Torrent
 		err           error
