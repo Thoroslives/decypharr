@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sirrobot01/decypharr/internal/config"
 	"github.com/sirrobot01/decypharr/internal/customerror"
@@ -105,11 +106,24 @@ func (q *QBit) handleTorrentsInfo(w http.ResponseWriter, r *http.Request) {
 	// (waiting for a free worker slot) is reported queuedDL, not stalledDL, so
 	// Radarr treats it as queued rather than stalled.
 	pending := q.manager.PendingJobIDs()
+	now := time.Now()
+	current := make(map[string]struct{}, len(torrents))
 	qbitTorrents := make([]Torrent, len(torrents))
 	for i, t := range torrents {
+		current[t.InfoHash] = struct{}{}
 		_, held := pending[t.InfoHash]
 		qbitTorrents[i] = convertToQBitTorrentTorrent(t, held)
+		// B2: override the instantaneous dlspeed with a rate derived from the
+		// truthful SizeDownloaded counter (Δbytes/Δwall-clock between polls),
+		// replacing grab's ~30%-optimistic BytesPerSecond meter. Only applied
+		// while actively downloading; all other states already report 0.
+		if qbitTorrents[i].State == storage.EntryStateDownloading {
+			qbitTorrents[i].Dlspeed = q.deriveDlspeed(t.InfoHash, t.SizeDownloaded, now)
+		}
 	}
+	// DA C5: prune cache to the live torrent set so it can't grow unbounded
+	// over a long-lived container session.
+	q.pruneSpeedCache(current)
 	utils.JSONResponse(w, qbitTorrents, http.StatusOK)
 }
 
